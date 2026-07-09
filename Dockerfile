@@ -52,7 +52,7 @@ RUN make -C agent
 # Stage 2: Runtime stage
 FROM debian:bullseye-slim
 
-# Install runtime libraries, iptables, gnupg, and python3 for CGI testing
+# Install runtime libraries, iptables, gnupg, and php-fpm for PHP testing
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpcre3 \
     libssl1.1 \
@@ -62,7 +62,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libyara4 \
     iptables \
     gnupg \
-    python3 \
+    php-fpm \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -74,9 +74,8 @@ COPY --from=builder /usr/src/firewall/kernel/fw_nfq /usr/local/bin/fw_nfq
 COPY --from=builder /usr/src/firewall/agent/fw_agent /usr/local/bin/fw_agent
 
 # Copy custom landing page & vulnerable application
-COPY index.html /usr/local/apache2/htdocs/
-COPY vulnerable-app/upload.py /usr/local/apache2/cgi-bin/upload.py
-RUN chmod +x /usr/local/apache2/cgi-bin/upload.py
+COPY vulnerable-app/index.html /usr/local/apache2/htdocs/index.html
+COPY vulnerable-app/upload.php /usr/local/apache2/htdocs/upload.php
 
 # Copy entrypoint script
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

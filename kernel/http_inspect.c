@@ -113,8 +113,8 @@ int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct tcphdr *
             .threat_type = THREAT_SQLI,
             .severity = SEVERITY_CRITICAL,
         };
-        strncpy(event.payload_preview, pattern, sizeof(event.payload_preview) - 1);
-        strncpy(event.details, details, sizeof(event.details) - 1);
+        snprintf(event.payload_preview, sizeof(event.payload_preview), "%s", pattern);
+        snprintf(event.details, sizeof(event.details), "%s", details);
         send_fw_event(&event);
         update_ip_reputation(iph->saddr, 20, THREAT_SQLI);
         return 1;
@@ -131,8 +131,8 @@ int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct tcphdr *
             .threat_type = THREAT_CMDI,
             .severity = SEVERITY_CRITICAL,
         };
-        strncpy(event.payload_preview, pattern, sizeof(event.payload_preview) - 1);
-        strncpy(event.details, details, sizeof(event.details) - 1);
+        snprintf(event.payload_preview, sizeof(event.payload_preview), "%s", pattern);
+        snprintf(event.details, sizeof(event.details), "%s", details);
         send_fw_event(&event);
         update_ip_reputation(iph->saddr, 20, THREAT_CMDI);
         return 1;
@@ -152,8 +152,8 @@ int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct tcphdr *
         if (strstr(pattern, "RFI")) event.threat_type = THREAT_RFI;
         else if (strstr(pattern, "LFI")) event.threat_type = THREAT_LFI;
 
-        strncpy(event.payload_preview, pattern, sizeof(event.payload_preview) - 1);
-        strncpy(event.details, details, sizeof(event.details) - 1);
+        snprintf(event.payload_preview, sizeof(event.payload_preview), "%s", pattern);
+        snprintf(event.details, sizeof(event.details), "%s", details);
         send_fw_event(&event);
         update_ip_reputation(iph->saddr, 20, event.threat_type);
         return 1;
@@ -170,8 +170,8 @@ int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct tcphdr *
             .threat_type = THREAT_BOT,
             .severity = SEVERITY_WARNING,
         };
-        strncpy(event.payload_preview, pattern, sizeof(event.payload_preview) - 1);
-        strncpy(event.details, details, sizeof(event.details) - 1);
+        snprintf(event.payload_preview, sizeof(event.payload_preview), "%s", pattern);
+        snprintf(event.details, sizeof(event.details), "%s", details);
         send_fw_event(&event);
         update_ip_reputation(iph->saddr, 15, THREAT_BOT);
         return 1;
@@ -189,7 +189,7 @@ int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct tcphdr *
                 .threat_type = THREAT_PHP_SHELL,
                 .severity = SEVERITY_CRITICAL,
             };
-            snprintf(event.payload_preview, sizeof(event.payload_preview), "PHP Shell: %s", php_signatures[i]);
+            snprintf(event.payload_preview, sizeof(event.payload_preview), "PHP Shell: %.100s", php_signatures[i]);
             memcpy(event.details, payload, scan_len > 255 ? 255 : scan_len);
             event.details[scan_len > 255 ? 255 : scan_len] = '\0';
             
@@ -211,7 +211,7 @@ int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct tcphdr *
                 .threat_type = THREAT_XSS,
                 .severity = SEVERITY_WARNING,
             };
-            snprintf(event.payload_preview, sizeof(event.payload_preview), "XSS Detected: %s", xss_signatures[i]);
+            snprintf(event.payload_preview, sizeof(event.payload_preview), "XSS Detected: %.100s", xss_signatures[i]);
             memcpy(event.details, payload, scan_len > 255 ? 255 : scan_len);
             event.details[scan_len > 255 ? 255 : scan_len] = '\0';
             
@@ -232,8 +232,8 @@ int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct tcphdr *
             .threat_type = THREAT_YARA,
             .severity = SEVERITY_CRITICAL,
         };
-        snprintf(event.payload_preview, sizeof(event.payload_preview), "YARA matched: %s", pattern);
-        snprintf(event.details, sizeof(event.details), "HTTP payload triggered inline YARA rule %s", pattern);
+        snprintf(event.payload_preview, sizeof(event.payload_preview), "YARA matched: %.100s", pattern);
+        snprintf(event.details, sizeof(event.details), "HTTP payload triggered inline YARA rule %.100s", pattern);
         send_fw_event(&event);
         update_ip_reputation(iph->saddr, 30, THREAT_YARA);
         return 1;

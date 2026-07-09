@@ -49,7 +49,7 @@ int detect_bot(const char *payload, int payload_len,
 
     // Extract User-Agent header value
     char user_agent[256] = {0};
-    char *ua_hdr = strcase_contains(headers_copy, "User-Agent:");
+    const char *ua_hdr = strcase_contains(headers_copy, "User-Agent:");
     if (ua_hdr) {
         // Skip "User-Agent:"
         ua_hdr += 11;

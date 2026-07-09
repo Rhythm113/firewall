@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apache 2.4.26 Web Server - Active</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: rgba(255, 255, 255, 0.03);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --accent-color: #3b82f6;
+            --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --success-color: #10b981;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* Abstract Background Gradients */
+        body::before, body::after {
+            content: '';
+            position: absolute;
+            width: 400px;
+            height: 400px;
+            border-radius: 50%;
+            filter: blur(120px);
+            z-index: -1;
+            opacity: 0.15;
+        }
+
+        body::before {
+            top: 10%;
+            left: 15%;
+            background: #3b82f6;
+        }
+
+        body::after {
+            bottom: 10%;
+            right: 15%;
+            background: #1d4ed8;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 600px;
+            padding: 20px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 24px;
+            padding: 40px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+            text-align: center;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.4);
+            border-color: rgba(59, 130, 246, 0.3);
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success-color);
+            padding: 6px 16px;
+            border-radius: 100px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-bottom: 24px;
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--success-color);
+            border-radius: 50%;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            margin-bottom: 32px;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 16px;
+            margin-bottom: 32px;
+            text-align: left;
+        }
+
+        .info-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            border-radius: 16px;
+            padding: 16px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .info-label {
+            color: var(--text-secondary);
+            font-weight: 400;
+            font-size: 0.95rem;
+        }
+
+        .info-value {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .code-box {
+            background: #060913;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 12px;
+            font-family: monospace;
+            font-size: 0.9rem;
+            color: #60a5fa;
+            word-break: break-all;
+        }
+
+        .instructions {
+            text-align: left;
+            border-top: 1px solid var(--card-border);
+            padding-top: 24px;
+        }
+
+        .instructions h3 {
+            font-size: 1.1rem;
+            margin-bottom: 12px;
+            color: var(--text-primary);
+        }
+
+        .instructions p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            line-height: 1.5;
+            margin-bottom: 12px;
+        }
+
+        .lan-info {
+            background: rgba(59, 130, 246, 0.05);
+            border: 1px solid rgba(59, 130, 246, 0.15);
+            border-radius: 12px;
+            padding: 16px;
+            margin-top: 16px;
+        }
+
+        .lan-info h4 {
+            color: #60a5fa;
+            margin-bottom: 6px;
+            font-size: 0.95rem;
+            font-weight: 600;
+        }
+
+        .lan-info p {
+            margin: 0;
+            font-size: 0.85rem;
+        }
+
+        footer {
+            margin-top: 24px;
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="status-badge">
+                <span class="status-dot"></span>
+                Web Server Online
+            </div>
+            <h1>Apache HTTP Server</h1>
+            <p class="subtitle">Custom Docker Build Completed Successfully</p>
+
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">Apache Version</span>
+                    <span class="info-value">2.4.26</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Base OS</span>
+                    <span class="info-value">Debian Bullseye (Slim)</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Port Exposure</span>
+                    <span class="info-value">80 (HTTP)</span>
+                </div>
+            </div>
+
+            <div class="instructions">
+                <h3>Access from LAN Devices</h3>
+                <p>Since the container's port is published to your host desktop, any device connected to the same local area network (LAN) can access this page.</p>
+                
+                <div class="lan-info">
+                    <h4>How to connect:</h4>
+                    <p>Open a browser on any local device and navigate to your desktop's LAN IP address:</p>
+                    <div class="code-box" style="margin-top: 8px;" id="lan-url">http://[YOUR_DESKTOP_LAN_IP]/</div>
+                </div>
+            </div>
+
+            <footer style="margin-top: 32px;">
+                Powered by Docker & Apache Software Foundation
+            </footer>
+        </div>
+    </div>
+
+    <script>
+        // Try to help guide the user with their host IP
+        const hostname = window.location.hostname;
+        const port = window.location.port;
+        const displayPort = port && port !== '80' ? `:${port}` : '';
+        const urlElement = document.getElementById('lan-url');
+        if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+            urlElement.textContent = `http://${hostname}${displayPort}/`;
+        } else {
+            urlElement.textContent = `http://<YOUR_DESKTOP_LAN_IP>${displayPort}/`;
+        }
+    </script>
+</body>
+</html>

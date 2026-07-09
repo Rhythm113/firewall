@@ -65,9 +65,12 @@ void *yara_inotify_thread(void *arg) {
     int wd;
     char buffer[BUF_LEN];
 
-    // Ensure uploads directory exists and is writable
-    mkdir("/var/www", 0777);
-    mkdir("/var/www/uploads", 0777);
+    const char *upload_dir = getenv("UPLOAD_DIR") ? getenv("UPLOAD_DIR") : "/var/www/uploads";
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "mkdir -p %s", upload_dir);
+    if (system(cmd) < 0) {
+        perror("[fw_nfq] failed to create upload directory");
+    }
 
     fd = inotify_init();
     if (fd < 0) {
@@ -75,14 +78,14 @@ void *yara_inotify_thread(void *arg) {
         return NULL;
     }
 
-    wd = inotify_add_watch(fd, "/var/www/uploads", IN_CLOSE_WRITE | IN_MOVED_TO);
+    wd = inotify_add_watch(fd, upload_dir, IN_CLOSE_WRITE | IN_MOVED_TO);
     if (wd < 0) {
         perror("[fw_nfq] inotify_add_watch failed");
         close(fd);
         return NULL;
     }
 
-    printf("[fw_nfq] YARA inotify watcher active on /var/www/uploads\n");
+    printf("[fw_nfq] YARA inotify watcher active on %s\n", upload_dir);
 
     while (1) {
         i = 0;
@@ -96,7 +99,7 @@ void *yara_inotify_thread(void *arg) {
             if (event->len) {
                 if (event->mask & (IN_CLOSE_WRITE | IN_MOVED_TO)) {
                     char filepath[512];
-                    snprintf(filepath, sizeof(filepath), "/var/www/uploads/%s", event->name);
+                    snprintf(filepath, sizeof(filepath), "%s/%s", upload_dir, event->name);
                     queue_file_upload_scan(filepath);
                 }
             }

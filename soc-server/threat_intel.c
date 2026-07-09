@@ -3,6 +3,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <errno.h>
 #include <curl/curl.h>
 #include "threat_intel.h"
 #include "db.h"
@@ -18,7 +19,7 @@ struct curl_buffer {
     size_t size;
 };
 
-static size_t curl_write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
+static size_t curl_write_cb(void *contents, size_t size, size_t nmemb, void *userp) {
     size_t realsize = size * nmemb;
     struct curl_buffer *mem = (struct curl_buffer *)userp;
 
@@ -44,10 +45,11 @@ static char *download_url(const char *url) {
 
     curl_handle = curl_easy_init();
     curl_easy_setopt(curl_handle, CURLOPT_URL, url);
-    curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, curl_write_callback);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, curl_write_cb);
     curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
     curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "Nullsploit-SOC/2.0");
     curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 15L);
+    curl_easy_setopt(curl_handle, CURLOPT_FOLLOWLOCATION, 1L);
 
     res = curl_easy_perform(curl_handle);
 

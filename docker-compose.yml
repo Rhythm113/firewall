@@ -10,8 +10,11 @@ services:
       - NET_ADMIN          # Required for Netfilter iptables and NFQUEUE inside the container
     ports:
       - "80:80"            # Exposed on localhost and LAN IP
+    environment:
+      - UPLOAD_DIR=/var/www/uploads
     volumes:
-      - ./signatures:/etc/fw_inspect:ro
+      - ./signatures:/etc/fw_inspect
+
       - ./keys:/etc/fw_keys
     depends_on:
       - soc-server

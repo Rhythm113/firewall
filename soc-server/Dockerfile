@@ -1,10 +1,11 @@
-# Stage 1: Build Next.js Dashboard
-FROM node:20-alpine AS next-builder
+# Stage 1: Build Java Spring Boot Dashboard
+FROM maven:3.8.5-openjdk-17-slim AS java-builder
 WORKDIR /usr/src/dashboard
-COPY dashboard-next/package.json ./
-RUN npm install
-COPY dashboard-next/ ./
-RUN npm run build
+COPY dashboard-spring/pom.xml ./
+# Pre-fetch dependencies to speed up subsequent builds
+RUN mvn dependency:go-offline -B
+COPY dashboard-spring/src ./src
+RUN mvn package -DskipTests
 
 # Stage 2: Build C SOC Server
 FROM debian:bullseye-slim AS builder
@@ -24,9 +25,10 @@ COPY soc_receiver.c db.c db.h auth.c auth.h pgp_wrapper.c pgp_wrapper.h protocol
 # Compile receiver daemon
 RUN make
 
-# Stage 3: Runtime stage
+# Stage 3: Runtime stage (uses Debian Bullseye and installs OpenJDK JRE)
 FROM debian:bullseye-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    openjdk-17-jre-headless \
     libpq5 \
     libssl1.1 \
     libcurl4 \
@@ -37,11 +39,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /usr/local/bin
 
-# Copy compiled receiver binary
+# Copy compiled C receiver binary
 COPY --from=builder /usr/src/soc/soc_receiver ./soc_receiver
 
-# Copy statically compiled Next.js dashboard
-COPY --from=next-builder /usr/src/dashboard/out /usr/local/share/soc/dashboard
+# Copy Spring Boot packaged JAR file
+COPY --from=java-builder /usr/src/dashboard/target/dashboard-1.0.0.jar ./dashboard.jar
 
 # Copy keys and configs entrypoint
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

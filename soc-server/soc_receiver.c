@@ -18,7 +18,8 @@
 
 #define MAX_EVENTS 64
 #define PORT_AGENT 1113
-#define PORT_WEB 8443
+#define PORT_WEB 8445
+#define PORT_LOCAL 8444
 #define MAX_SSE_CLIENTS 32
 #define BUFFER_SIZE 65536
 #define MAX_CONNECTED_AGENTS 128
@@ -35,8 +36,8 @@ struct agent_connection {
     int fd;
     char client_ip[32];
     char buf[BUFFER_SIZE];
-    int bytes_read;
-    int payload_len;
+    uint32_t bytes_read;
+    uint32_t payload_len;
     struct soc_msg_hdr hdr;
     int header_received;
 };
@@ -49,7 +50,7 @@ struct http_connection {
     int fd;
     char client_ip[32];
     char buf[8192];
-    int bytes_read;
+    uint32_t bytes_read;
 };
 
 static void sse_init(void) {
@@ -229,11 +230,12 @@ static void serve_static_file(int fd, const char *url_path) {
         return;
     }
 
+    const char *target_path = url_path;
     if (strcmp(url_path, "/") == 0 || strcmp(url_path, "/index.html") == 0) {
-        strcpy(url_path, "/index.html");
+        target_path = "/index.html";
     }
 
-    snprintf(file_path, sizeof(file_path), "/usr/local/share/soc/dashboard%s", url_path);
+    snprintf(file_path, sizeof(file_path), "/usr/local/share/soc/dashboard%s", target_path);
 
     int file_fd = open(file_path, O_RDONLY);
     if (file_fd < 0) {
@@ -611,9 +613,19 @@ int main(int argc, char **argv) {
     setvbuf(stderr, NULL, _IONBF, 0);
     printf("[receiver] Starting Custom SOC Receiver Daemon...\n");
 
-    // Initialize database
-    if (db_init(NULL) != 0) {
-        fprintf(stderr, "[receiver] Failed to initialize PostgreSQL connection\n");
+    // Initialize database with a retry loop for startup synchronization
+    int db_connected = 0;
+    for (int retries = 15; retries > 0; retries--) {
+        if (db_init(NULL) == 0) {
+            db_connected = 1;
+            break;
+        }
+        printf("[receiver] Database not ready yet, retrying in 2 seconds (%d retries remaining)...\n", retries - 1);
+        sleep(2);
+    }
+
+    if (!db_connected) {
+        fprintf(stderr, "[receiver] Failed to initialize PostgreSQL connection after multiple attempts.\n");
         return 1;
     }
 
@@ -625,22 +637,30 @@ int main(int argc, char **argv) {
 
     int listen_agent_fd = create_listen_socket(PORT_AGENT);
     int listen_web_fd = create_listen_socket(PORT_WEB);
+    int listen_local_fd = create_listen_socket(PORT_LOCAL);
 
-    if (listen_agent_fd < 0 || listen_web_fd < 0) {
+    if (listen_agent_fd < 0 || listen_web_fd < 0 || listen_local_fd < 0) {
         fprintf(stderr, "[receiver] Failed to bind listening sockets\n");
         cleanup_threat_intel();
         db_close();
+        if (listen_agent_fd >= 0) close(listen_agent_fd);
+        if (listen_web_fd >= 0) close(listen_web_fd);
+        if (listen_local_fd >= 0) close(listen_local_fd);
         return 1;
     }
 
     printf("[receiver] Listening for Agent connections on port %d...\n", PORT_AGENT);
     printf("[receiver] Listening for Web/Dashboard connections on port %d...\n", PORT_WEB);
+    printf("[receiver] Listening for Local Controller connections on port %d...\n", PORT_LOCAL);
 
     epoll_fd = epoll_create1(0);
     if (epoll_fd < 0) {
         perror("[receiver] epoll_create failed");
         cleanup_threat_intel();
         db_close();
+        close(listen_agent_fd);
+        close(listen_web_fd);
+        close(listen_local_fd);
         return 1;
     }
 
@@ -652,6 +672,10 @@ int main(int argc, char **argv) {
     ev.events = EPOLLIN;
     ev.data.fd = listen_web_fd;
     epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listen_web_fd, &ev);
+
+    ev.events = EPOLLIN;
+    ev.data.fd = listen_local_fd;
+    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listen_local_fd, &ev);
 
     struct epoll_event events[MAX_EVENTS];
 
@@ -693,7 +717,27 @@ int main(int argc, char **argv) {
                 ev.events = EPOLLIN | EPOLLRDHUP;
                 ev.data.ptr = conn;
                 epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &ev);
-            } 
+            }
+            else if (fd == listen_local_fd) {
+                struct sockaddr_in client_addr;
+                socklen_t client_len = sizeof(client_addr);
+                int client_fd = accept(listen_local_fd, (struct sockaddr *)&client_addr, &client_len);
+                if (client_fd >= 0) {
+                    struct local_cmd {
+                        char agent_uuid_hex[33];
+                        uint8_t command_type;
+                        uint32_t ip;
+                    } cmd;
+                    
+                    int bytes = read(client_fd, &cmd, sizeof(cmd));
+                    if (bytes == sizeof(cmd)) {
+                        cmd.agent_uuid_hex[32] = '\0';
+                        printf("[receiver] Received local control command: Block IP %u for Agent %s\n", cmd.ip, cmd.agent_uuid_hex);
+                        send_command_to_agent(cmd.agent_uuid_hex, cmd.command_type, &cmd.ip, sizeof(cmd.ip));
+                    }
+                    close(client_fd);
+                }
+            }
             else if (fd == listen_web_fd) {
                 struct sockaddr_in client_addr;
                 socklen_t client_len = sizeof(client_addr);
@@ -779,7 +823,7 @@ int main(int argc, char **argv) {
                             }
 
                             if (conn->payload_len >= BUFFER_SIZE) {
-                                fprintf(stderr, "[receiver] Payload too large (%d). Disconnecting.\n", conn->payload_len);
+                                fprintf(stderr, "[receiver] Payload too large (%u). Disconnecting.\n", conn->payload_len);
                                 epoll_ctl(epoll_fd, EPOLL_CTL_DEL, conn->fd, NULL);
                                 unregister_connected_agent(conn->fd);
                                 close(conn->fd);
@@ -795,7 +839,7 @@ int main(int argc, char **argv) {
                             conn->header_received = 0;
                             conn->bytes_read = 0;
                         } else {
-                            int needed = conn->payload_len - conn->bytes_read;
+                            uint32_t needed = conn->payload_len - conn->bytes_read;
                             int r = read(conn->fd, conn->buf + conn->bytes_read, needed);
                             if (r <= 0) {
                                 if (r < 0 && errno == EAGAIN) continue;
@@ -872,5 +916,6 @@ int main(int argc, char **argv) {
     db_close();
     close(listen_agent_fd);
     close(listen_web_fd);
+    close(listen_local_fd);
     return 0;
 }

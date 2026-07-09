@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nullsploit Enterprise SOC Dashboard</title>
+    <style>
+        :root {
+            --background: #030712;
+            --foreground: #f3f4f6;
+            --card: #0b0f19;
+            --border: #1f2937;
+            --accent: #00d4ff;
+        }
+
+        body {
+            background-color: var(--background);
+            color: var(--foreground);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            display: flex;
+            min-h: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Layout */
+        aside {
+            width: 260px;
+            background: #080d1a;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        header {
+            height: 64px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 32px;
+            background: rgba(11, 15, 25, 0.5);
+            backdrop-filter: blur(10px);
+            position: sticky;
+            top: 0;
+            z-index: 40;
+        }
+
+        .content-area {
+            padding: 32px;
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        /* Glassmorphism Cards */
+        .card {
+            background: rgba(11, 15, 25, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(0, 212, 255, 0.1);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .card:hover {
+            box-shadow: 0 0 15px rgba(0, 212, 255, 0.2);
+            border-color: rgba(0, 212, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        /* Typography & Controls */
+        h1 {
+            margin: 0;
+            font-size: 1.25rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #d1d5db;
+        }
+
+        nav button {
+            width: 100%;
+            background: transparent;
+            border: none;
+            color: #9ca3af;
+            padding: 12px 24px;
+            text-align: left;
+            font-size: 0.9rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            transition: all 0.2s;
+        }
+
+        nav button.active {
+            background: linear-gradient(90deg, rgba(0, 212, 255, 0.15), rgba(99, 102, 241, 0.15));
+            border-left: 3px solid var(--accent);
+            color: var(--accent);
+        }
+
+        nav button:hover:not(.active) {
+            background: rgba(255, 255, 255, 0.05);
+            color: #fff;
+        }
+
+        /* Table design */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: monospace;
+            font-size: 0.85rem;
+        }
+
+        th {
+            border-bottom: 1px solid var(--border);
+            padding: 12px 8px;
+            color: #9ca3af;
+            text-align: left;
+        }
+
+        td {
+            padding: 12px 8px;
+            border-bottom: 1px solid #111827;
+            color: #e5e7eb;
+        }
+
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        /* Badges */
+        .badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: bold;
+        }
+
+        .badge-critical { background: #7f1d1d; color: #fca5a5; border: 1px solid #b91c1c; }
+        .badge-warning { background: #78350f; color: #fde68a; border: 1px solid #d97706; }
+        .badge-info { background: #1e3a8a; color: #bfdbfe; border: 1px solid #2563eb; }
+
+        /* Forms */
+        input, select, textarea {
+            background: #030712;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: #fff;
+            padding: 8px 12px;
+            width: 100%;
+            box-sizing: border-box;
+            font-family: inherit;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        button.btn-primary {
+            background: var(--accent);
+            color: #030712;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button.btn-primary:hover {
+            background: #00b0d4;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            color: #9ca3af;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+        }
+
+        /* Sparkline timeline */
+        .timeline-canvas {
+            width: 100%;
+            height: 220px;
+            background: #030712;
+            border-radius: 8px;
+            border: 1px solid #111827;
+        }
+
+        .alert-toast {
+            padding: 8px 16px;
+            border-radius: 9999px;
+            font-size: 0.8rem;
+            border: 1px solid var(--border);
+            background: rgba(11, 15, 25, 0.8);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Sidebar -->
+    <aside>
+        <div>
+            <div style="padding: 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px;">
+                <div style="width: 12px; height: 12px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 8px var(--accent);"></div>
+                <div>
+                    <strong style="letter-spacing: 1px; color: #fff;">NULLSPLOIT</strong>
+                    <div style="font-size: 0.65rem; color: var(--accent); letter-spacing: 2px;">SPRING CONSOLE</div>
+                </div>
+            </div>
+
+            <nav style="padding-top: 16px;">
+                <button class="active" onclick="switchTab('overview')">Overview</button>
+                <button onclick="switchTab('events')">Security Events</button>
+                <button onclick="switchTab('agents')">WAF Nodes</button>
+                <button onclick="switchTab('yara')">YARA Catalog</button>
+                <button onclick="switchTab('reputation')">IP Reputation</button>
+                <button onclick="switchTab('configs')">Global Configs</button>
+            </nav>
+        </div>
+
+        <div style="padding: 24px; border-top: 1px solid var(--border); font-size: 0.7rem; color: #4b5563; font-family: monospace;">
+            Nullsploit Java Spring v3.1<br>Enterprise Security Layer
+        </div>
+    </aside>
+
+    <!-- Main -->
+    <main>
+        <header>
+            <h1 id="tab-title">Overview</h1>
+            <div style="display: flex; align-items: center; gap: 16px;">
+                <div id="status-toast" class="alert-toast" style="display: none;"></div>
+                <div style="font-size: 0.75rem; color: #9ca3af; border: 1px solid var(--border); padding: 6px 12px; border-radius: 6px; background: #080d1a;">
+                    PLATFORM: JAVA_SPRING_BOOT
+                </div>
+            </div>
+        </header>
+
+        <div class="content-area">
+            
+            <!-- OVERVIEW TAB -->
+            <div id="tab-overview" class="tab-content">
+                <div class="grid-3" style="margin-bottom: 24px;">
+                    <div class="card">
+                        <div style="font-size: 0.75rem; color: #9ca3af; text-transform: uppercase;">Total Events</div>
+                        <div style="font-size: 2.25rem; font-weight: bold; margin-top: 8px; color: var(--accent);" id="stat-events">0</div>
+                    </div>
+                    <div class="card">
+                        <div style="font-size: 0.75rem; color: #9ca3af; text-transform: uppercase;">Active Nodes</div>
+                        <div style="font-size: 2.25rem; font-weight: bold; margin-top: 8px; color: #34d399;" id="stat-agents">0 / 0</div>
+                    </div>
+                    <div class="card">
+                        <div style="font-size: 0.75rem; color: #9ca3af; text-transform: uppercase;">Malicious Indicators</div>
+                        <div style="font-size: 2.25rem; font-weight: bold; margin-top: 8px; color: #f87171;" id="stat-indicators">0</div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Threat Activity Timeline</h3>
+                    <canvas id="timeline-canvas" class="timeline-canvas" width="800" height="220"></canvas>
+                </div>
+
+                <div class="card">
+                    <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Live Threat Log</h3>
+                    <div style="overflow-x: auto;">
+                        <table id="live-threat-table">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Source IP</th>
+                                    <th>Destination IP</th>
+                                    <th>Threat Category</th>
+                                    <th>Severity</th>
+                                    <th>Payload Preview</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- EVENTS TAB -->
+            <div id="tab-events" class="tab-content" style="display: none;">
+                <div class="card">
+                    <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Threat Log Repository</h3>
+                    <div style="overflow-x: auto;">
+                        <table id="full-events-table">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Source IP</th>
+                                    <th>Dest IP</th>
+                                    <th>Port (S/D)</th>
+                                    <th>Threat Vector</th>
+                                    <th>Severity</th>
+                                    <th>Trace Details</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- AGENTS TAB -->
+            <div id="tab-agents" class="tab-content" style="display: none;">
+                <div class="grid-3">
+                    <div class="card" style="grid-column: span 2;">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Registered Cluster Nodes</h3>
+                        <div style="display: flex; flex-direction: column; gap: 12px;" id="agents-list"></div>
+                    </div>
+
+                    <div class="card">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Block IP Downstream</h3>
+                        <form id="block-agent-form">
+                            <div class="form-group">
+                                <label>Target Node UUID</label>
+                                <select id="block-agent-uuid" required></select>
+                            </div>
+                            <div class="form-group">
+                                <label>IP Address</label>
+                                <input type="text" id="block-agent-ip" placeholder="e.g. 192.168.1.100" required>
+                            </div>
+                            <button type="submit" class="btn-primary" style="width: 100%;">Transmit Block Command</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- YARA TAB -->
+            <div id="tab-yara" class="tab-content" style="display: none;">
+                <div class="grid-3">
+                    <div class="card" style="grid-column: span 2;">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">New Yara Rule Deployer</h3>
+                        <form id="yara-form">
+                            <div class="form-group">
+                                <label>Rule Name</label>
+                                <input type="text" id="yara-name" placeholder="webshell_php_eval" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Yara Content</label>
+                                <textarea id="yara-content" rows="12" placeholder="rule php_webshell { strings: $a = 'eval(' condition: $a }" required></textarea>
+                            </div>
+                            <button type="submit" class="btn-primary">Deploy to Cluster</button>
+                        </form>
+                    </div>
+
+                    <div class="card">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Rule Catalog</h3>
+                        <div style="display: flex; flex-direction: column; gap: 12px;" id="yara-list"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- REPUTATION TAB -->
+            <div id="tab-reputation" class="tab-content" style="display: none;">
+                <div class="card">
+                    <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Dynamic Malice Scoring Matrix</h3>
+                    <div style="overflow-x: auto;">
+                        <table id="reputation-table">
+                            <thead>
+                                <tr>
+                                    <th>IP Address</th>
+                                    <th>Malice Score</th>
+                                    <th>Local Score</th>
+                                    <th>External Score</th>
+                                    <th>Threat Profile</th>
+                                    <th>Last Activity</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CONFIGS TAB -->
+            <div id="tab-configs" class="tab-content" style="display: none;">
+                <div class="grid-3">
+                    <div class="card">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Configure Settings</h3>
+                        <form id="config-form">
+                            <div class="form-group">
+                                <label>Config Parameter Key</label>
+                                <input type="text" id="config-key" placeholder="e.g. rep_decay_rate" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Value (JSON)</label>
+                                <input type="text" id="config-value" placeholder='{"rate": 5}' required>
+                            </div>
+                            <div class="form-group">
+                                <label>Category</label>
+                                <select id="config-category">
+                                    <option value="general">General</option>
+                                    <option value="detection">Detection</option>
+                                    <option value="feeds">Feeds</option>
+                                    <option value="agents">Agents</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn-primary" style="width: 100%;">Save Parameter</button>
+                        </form>
+                    </div>
+
+                    <div class="card" style="grid-column: span 2;">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Active Settings</h3>
+                        <div style="display: flex; flex-direction: column; gap: 12px;" id="configs-list"></div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <script>
+        const API_BASE = '/api/v2';
+
+        function showStatus(text, type = 'success') {
+            const el = document.getElementById('status-toast');
+            el.innerText = text;
+            el.style.display = 'block';
+            el.style.color = type === 'success' ? '#10b981' : '#ef4444';
+            setTimeout(() => { el.style.display = 'none'; }, 4000);
+        }
+
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
+            document.querySelectorAll('nav button').forEach(el => el.classList.remove('active'));
+            
+            document.getElementById('tab-' + tabId).style.display = 'block';
+            document.getElementById('tab-title').innerText = tabId;
+            
+            const btn = Array.from(document.querySelectorAll('nav button')).find(b => b.innerText.toLowerCase().includes(tabId.substring(0,4)));
+            if (btn) btn.classList.add('active');
+
+            if (tabId === 'overview') drawTimeline();
+        }
+
+        function getThreatName(type) {
+            const map = {
+                1: 'PHP Shell Payload',
+                2: 'XSS Query Attack',
+                3: 'SYN Flood Rate-limit',
+                4: 'Slowloris TCP Timeout',
+                5: 'IP Address Blocked',
+                6: 'SQL Injection',
+                7: 'Command Injection',
+                8: 'Path Traversal',
+                9: 'Local File Inclusion',
+                10: 'Remote File Inclusion',
+                11: 'Bot / Automated Scanner',
+                12: 'YARA Signature Trigger',
+                13: 'High Malice IP Reputation'
+            };
+            return map[type] || `Unknown (${type})`;
+        }
+
+        function getSeverityBadge(sev) {
+            if (sev === 2) return `<span class="badge badge-critical">CRITICAL</span>`;
+            if (sev === 1) return `<span class="badge badge-warning">WARNING</span>`;
+            return `<span class="badge badge-info">INFO</span>`;
+        }
+
+        async function fetchData() {
+            try {
+                // 1. Stats
+                const statsRes = await fetch(`${API_BASE}/dashboard/stats`);
+                if (statsRes.ok) {
+                    const stats = await statsRes.json();
+                    document.getElementById('stat-events').innerText = stats.total_events || 0;
+                    window.timelineData = stats.timeline || [];
+                    drawTimeline();
+                }
+
+                // 2. Events & Log
+                const eventsRes = await fetch(`${API_BASE}/events?limit=50`);
+                if (eventsRes.ok) {
+                    const events = await eventsRes.json();
+                    
+                    // Live Threat Log (last 10)
+                    const liveBody = document.querySelector('#live-threat-table tbody');
+                    liveBody.innerHTML = events.slice(0, 10).map(evt => `
+                        <tr>
+                            <td>${new Date(evt.timestamp * 1000).toLocaleString()}</td>
+                            <td style="color: #ef4444; font-weight: bold;">${evt.src_ip}</td>
+                            <td>${evt.dest_ip}</td>
+                            <td>${getThreatName(evt.threat_type)}</td>
+                            <td>${getSeverityBadge(evt.severity)}</td>
+                            <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${evt.payload_preview}</td>
+                        </tr>
+                    `).join('');
+
+                    // Full Events Log
+                    const fullBody = document.querySelector('#full-events-table tbody');
+                    fullBody.innerHTML = events.map(evt => `
+                        <tr>
+                            <td>${new Date(evt.timestamp * 1000).toLocaleString()}</td>
+                            <td style="color: #ef4444; font-weight: bold;">${evt.src_ip}</td>
+                            <td>${evt.dest_ip}</td>
+                            <td>${evt.src_port} / ${evt.dest_port}</td>
+                            <td>${getThreatName(evt.threat_type)}</td>
+                            <td>${getSeverityBadge(evt.severity)}</td>
+                            <td style="max-width: 300px; word-break: break-all;">${evt.details}</td>
+                        </tr>
+                    `).join('');
+                }
+
+                // 3. Agents
+                const agentsRes = await fetch(`${API_BASE}/agents`);
+                if (agentsRes.ok) {
+                    const agents = await agentsRes.json();
+                    document.getElementById('stat-agents').innerText = `${agents.filter(a => a.status === 'active').length} / ${agents.length}`;
+                    
+                    const agentsList = document.getElementById('agents-list');
+                    agentsList.innerHTML = agents.map(a => `
+                        <div class="card" style="display: flex; justify-content: space-between; align-items: center; padding: 16px; margin: 0;">
+                            <div>
+                                <strong style="color: #fff;">${a.hostname}</strong>
+                                <div style="font-size: 0.75rem; color: #9ca3af; font-family: monospace; margin-top: 4px;">IP: ${a.ip} | UUID: ${a.uuid.substring(0,16)}...</div>
+                            </div>
+                            <span class="badge ${a.status === 'active' ? 'badge-info' : 'badge-warning'}">${a.status.toUpperCase()}</span>
+                        </div>
+                    `).join('');
+
+                    // Populate select
+                    const select = document.getElementById('block-agent-uuid');
+                    select.innerHTML = agents.map(a => `<option value="${a.uuid}">${a.hostname} (${a.uuid.substring(0,8)})</option>`).join('');
+                }
+
+                // 4. Reputation
+                const repRes = await fetch(`${API_BASE}/reputation`);
+                if (repRes.ok) {
+                    const rep = await repRes.json();
+                    document.getElementById('stat-indicators').innerText = rep.filter(r => r.score >= 80).length;
+                    
+                    const repBody = document.querySelector('#reputation-table tbody');
+                    repBody.innerHTML = rep.map(r => `
+                        <tr>
+                            <td><strong>${r.ip}</strong></td>
+                            <td><span class="badge ${r.score >= 80 ? 'badge-critical' : r.score >= 40 ? 'badge-warning' : 'badge-info'}">${r.score} / 100</span></td>
+                            <td>${r.local_score}</td>
+                            <td>${r.external_score}</td>
+                            <td>${r.attack_types || 'None'}</td>
+                            <td>${r.updated_at}</td>
+                        </tr>
+                    `).join('');
+                }
+
+                // 5. Yara Rules
+                const yaraRes = await fetch(`${API_BASE}/yara/rules`);
+                if (yaraRes.ok) {
+                    const rules = await yaraRes.json();
+                    const yaraList = document.getElementById('yara-list');
+                    yaraList.innerHTML = rules.map(r => `
+                        <div class="card" style="padding: 16px; margin: 0; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong style="color: #00d4ff;">${r.name}</strong>
+                                <div style="font-size: 0.75rem; color: #9ca3af; margin-top: 4px;">Matches: ${r.match_count}</div>
+                            </div>
+                            <button onclick="deleteYaraRule('${r.name}')" style="background: transparent; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem;">DELETE</button>
+                        </div>
+                    `).join('');
+                }
+
+                // 6. Configs
+                const configsRes = await fetch(`${API_BASE}/config`);
+                if (configsRes.ok) {
+                    const configs = await configsRes.json();
+                    const list = document.getElementById('configs-list');
+                    list.innerHTML = configs.map(c => `
+                        <div class="card" style="padding: 16px; margin: 0;">
+                            <div style="display: flex; justify-content: space-between;">
+                                <strong style="color: var(--accent); font-family: monospace;">${c.key}</strong>
+                                <span class="badge badge-info">${c.category.toUpperCase()}</span>
+                            </div>
+                            <div style="margin-top: 8px; font-weight: bold; color: #fff;">Value: ${JSON.stringify(c.value)}</div>
+                            <div style="margin-top: 4px; font-size: 0.75rem; color: #9ca3af;">${c.description}</div>
+                        </div>
+                    `).join('');
+                }
+
+            } catch (err) {
+                console.error("Fetch error", err);
+            }
+        }
+
+        function drawTimeline() {
+            const canvas = document.getElementById('timeline-canvas');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const w = canvas.width;
+            const h = canvas.height;
+
+            ctx.clearRect(0, 0, w, h);
+
+            const points = window.timelineData || [];
+            if (points.length < 2) return;
+
+            const maxVal = Math.max(...points.map(p => p.count), 5);
+            const step = w / (points.length - 1);
+
+            ctx.beginPath();
+            ctx.strokeStyle = '#00d4ff';
+            ctx.lineWidth = 2;
+
+            points.forEach((p, idx) => {
+                const x = idx * step;
+                const y = h - (p.count / maxVal * (h - 40)) - 20;
+                if (idx === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+
+            // Fill area
+            ctx.lineTo(w, h);
+            ctx.lineTo(0, h);
+            ctx.closePath();
+            const grad = ctx.createLinearGradient(0, 0, 0, h);
+            grad.addColorStop(0, 'rgba(0, 212, 255, 0.15)');
+            grad.addColorStop(1, 'rgba(0, 212, 255, 0)');
+            ctx.fillStyle = grad;
+            ctx.fill();
+        }
+
+        // Submissions
+        document.getElementById('block-agent-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const uuid = document.getElementById('block-agent-uuid').value;
+            const ip = document.getElementById('block-agent-ip').value;
+
+            const res = await fetch(`${API_BASE}/agents/${uuid}/block-ip`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip })
+            });
+            if (res.ok) {
+                showStatus(`Block command sent for IP ${ip}`);
+                document.getElementById('block-agent-ip').value = '';
+                fetchData();
+            } else {
+                showStatus('Failed to send block command', 'error');
+            }
+        });
+
+        document.getElementById('yara-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = document.getElementById('yara-name').value;
+            const content = document.getElementById('yara-content').value;
+
+            const res = await fetch(`${API_BASE}/yara/rules`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, content })
+            });
+            if (res.ok) {
+                showStatus(`Rule ${name} deployed successfully`);
+                document.getElementById('yara-name').value = '';
+                document.getElementById('yara-content').value = '';
+                fetchData();
+            } else {
+                showStatus('Failed to deploy rule', 'error');
+            }
+        });
+
+        async function deleteYaraRule(name) {
+            const res = await fetch(`${API_BASE}/yara/rules/${name}`, {
+                method: 'DELETE'
+            });
+            if (res.ok) {
+                showStatus(`Rule ${name} deleted`);
+                fetchData();
+            }
+        }
+
+        document.getElementById('config-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const key = document.getElementById('config-key').value;
+            const value = document.getElementById('config-value').value;
+            const category = document.getElementById('config-category').value;
+
+            const res = await fetch(`${API_BASE}/config`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key, value, category })
+            });
+            if (res.ok) {
+                showStatus(`Config ${key} updated`);
+                document.getElementById('config-key').value = '';
+                document.getElementById('config-value').value = '';
+                fetchData();
+            }
+        });
+
+        // Initialize
+        fetchData();
+        setInterval(fetchData, 5000);
+    </script>
+</body>
+</html>

@@ -10,6 +10,8 @@
 #include <sys/un.h>
 #include <sys/select.h>
 #include <sys/time.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -429,8 +431,12 @@ int main(int argc, char **argv) {
 
             if (r == sizeof(soc_hdr) && ntohl(soc_hdr.magic) == MAGIC_HEADER) {
                 uint32_t payload_len = ntohl(soc_hdr.payload_len);
-                if (payload_len > 0) {
+                if (payload_len > 0 && payload_len < 16777216) {
                     char *encrypted = malloc(payload_len);
+                    if (!encrypted) {
+                        fprintf(stderr, "[agent] Failed to allocate memory for payload\n");
+                        continue;
+                    }
                     size_t total_read = 0;
                     while (total_read < payload_len) {
                         int read_bytes = read(soc_fd, encrypted + total_read, payload_len - total_read);
