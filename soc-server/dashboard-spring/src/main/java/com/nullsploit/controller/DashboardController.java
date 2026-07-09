@@ -65,7 +65,7 @@ public class DashboardController {
             @RequestParam(defaultValue = "50") int limit,
             @RequestParam(defaultValue = "0") int offset) {
         return jdbc.queryForList(
-            "SELECT id, encode(agent_uuid, 'hex') as agent_uuid, timestamp, src_ip, dest_ip, src_port, dest_port, threat_type, severity, payload_preview, details " +
+            "SELECT id, agent_uuid::text as agent_uuid, timestamp, src_ip, dest_ip, src_port, dest_port, threat_type, severity, payload_preview, details " +
             "FROM events ORDER BY timestamp DESC LIMIT ? OFFSET ?", limit, offset
         );
     }
@@ -74,7 +74,7 @@ public class DashboardController {
     @GetMapping("/agents")
     public List<Map<String, Object>> getAgents() {
         return jdbc.queryForList(
-            "SELECT encode(uuid, 'hex') as uuid, hostname, ip, " +
+            "SELECT uuid::text as uuid, hostname, ip, " +
             "CASE WHEN last_seen >= CURRENT_TIMESTAMP - INTERVAL '30 seconds' THEN 'active' ELSE 'offline' END as status, " +
             "last_seen FROM agents"
         );
@@ -123,7 +123,7 @@ public class DashboardController {
     // 4. Delete Agent
     @DeleteMapping("/agents/{uuid}")
     public Map<String, String> deleteAgent(@PathVariable String uuid) {
-        jdbc.update("DELETE FROM agents WHERE uuid = decode(?, 'hex')", uuid);
+        jdbc.update("DELETE FROM agents WHERE uuid = ?::uuid", uuid);
         Map<String, String> res = new HashMap<>();
         res.put("status", "removed");
         return res;

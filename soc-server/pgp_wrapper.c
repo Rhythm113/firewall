@@ -161,6 +161,7 @@ int pgp_decrypt(const char *ciphertext, size_t ciphertext_len, void **plaintext,
             "gpg",
             "--batch",
             "--yes",
+            "--trust-model", "always",
             "--decrypt",
             NULL
         };

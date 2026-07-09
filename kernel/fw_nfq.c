@@ -196,7 +196,7 @@ static int fw_nfq_callback(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
             snprintf(event.payload_preview, sizeof(event.payload_preview), "IP Reputation: %d", rep_score);
             snprintf(event.details, sizeof(event.details), "Connection dropped: source IP reputation is malicious (score >= 80)");
             send_fw_event(&event);
-            verdict = NF_DROP;
+            verdict = NF_DROP; // Restored production WAF drop action
         }
         // 2. IP Blocklist check
         else if (inspect_ip_blocklist(iph->saddr)) {
@@ -212,8 +212,8 @@ static int fw_nfq_callback(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
             send_fw_event(&event);
             verdict = NF_DROP;
         }
-        // Check TCP traffic
-        else if (iph->protocol == IPPROTO_TCP && payload_len >= (int)(iph->ihl * 4 + sizeof(struct tcphdr))) {
+        // Check TCP traffic independently
+        if (iph->protocol == IPPROTO_TCP && payload_len >= (int)(iph->ihl * 4 + sizeof(struct tcphdr))) {
             struct tcphdr *tcph = (struct tcphdr *)(payload + (iph->ihl * 4));
 
             // 3. TCP Stats check (SYN flood, Slowloris)
