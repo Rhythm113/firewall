@@ -65,7 +65,7 @@ public class DashboardController {
             @RequestParam(defaultValue = "50") int limit,
             @RequestParam(defaultValue = "0") int offset) {
         return jdbc.queryForList(
-            "SELECT id, agent_uuid::text as agent_uuid, timestamp, src_ip, dest_ip, src_port, dest_port, threat_type, severity, payload_preview, details " +
+            "SELECT id, agent_uuid::text as agent_uuid, EXTRACT(epoch FROM timestamp)::bigint as timestamp, src_ip::text as src_ip, dest_ip::text as dest_ip, src_port, dest_port, threat_type, severity, payload_preview, details " +
             "FROM events ORDER BY timestamp DESC LIMIT ? OFFSET ?", limit, offset
         );
     }
@@ -177,7 +177,7 @@ public class DashboardController {
     @GetMapping("/blocklist")
     public List<Map<String, Object>> getBlocklist() {
         return jdbc.queryForList(
-            "SELECT id, ip_cidr, list_type, reason, created_at FROM blocklist"
+            "SELECT id, ip_cidr::text as ip_cidr, list_type, reason, created_at FROM blocklist"
         );
     }
 
@@ -208,7 +208,7 @@ public class DashboardController {
     @GetMapping("/reputation")
     public List<Map<String, Object>> getReputation() {
         return jdbc.queryForList(
-            "SELECT ip, score, local_score, external_score, attack_types, updated_at FROM ip_reputation"
+            "SELECT ip::text as ip, score, local_score, external_score, attack_types, updated_at FROM ip_reputation"
         );
     }
 
