@@ -215,9 +215,59 @@
             border: 1px solid var(--border);
             background: rgba(11, 15, 25, 0.8);
         }
+
+        /* Login Overlay */
+        #login-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(3, 7, 18, 0.95);
+            backdrop-filter: blur(20px);
+            z-index: 9999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .login-card {
+            width: 380px;
+            background: rgba(11, 15, 25, 0.85);
+            border: 1px solid rgba(0, 212, 255, 0.2);
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 0 30px rgba(0, 212, 255, 0.1);
+        }
     </style>
 </head>
 <body>
+
+    <!-- Login Overlay -->
+    <div id="login-overlay">
+        <div class="login-card">
+            <div style="text-align: center; margin-bottom: 32px;">
+                <div style="width: 16px; height: 16px; background: var(--accent); border-radius: 50%; display: inline-block; box-shadow: 0 0 10px var(--accent); margin-bottom: 8px;"></div>
+                <h2 style="margin: 0; font-size: 1.5rem; letter-spacing: 1px; color: #fff; font-family: sans-serif;">NULLSPLOIT</h2>
+                <div style="font-size: 0.7rem; color: var(--accent); letter-spacing: 2px; margin-top: 4px; font-family: sans-serif;">SECURE ACCESS CONTROL</div>
+            </div>
+
+            <form id="login-form">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="login-username" placeholder="e.g. admin" required>
+                </div>
+                <div class="form-group" style="margin-bottom: 24px;">
+                    <label>Password</label>
+                    <input type="password" id="login-password" placeholder="••••••••" required>
+                </div>
+                <div id="login-error" style="color: #ef4444; font-size: 0.8rem; margin-bottom: 16px; display: none; text-align: center;">
+                    Invalid credentials. Please retry.
+                </div>
+                <button type="submit" class="btn-primary" style="width: 100%; padding: 12px;">Authenticate Session</button>
+            </form>
+        </div>
+    </div>
 
     <!-- Sidebar -->
     <aside>
@@ -237,6 +287,7 @@
                 <button onclick="switchTab('yara')">YARA Catalog</button>
                 <button onclick="switchTab('reputation')">IP Reputation</button>
                 <button onclick="switchTab('configs')">Global Configs</button>
+                <button onclick="logout()" style="color: #ef4444; margin-top: 24px;">Logout</button>
             </nav>
         </div>
 
@@ -281,22 +332,31 @@
                     <canvas id="timeline-canvas" class="timeline-canvas" width="800" height="220"></canvas>
                 </div>
 
-                <div class="card">
-                    <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Live Threat Log</h3>
-                    <div style="overflow-x: auto;">
-                        <table id="live-threat-table">
-                            <thead>
-                                <tr>
-                                    <th>Timestamp</th>
-                                    <th>Source IP</th>
-                                    <th>Destination IP</th>
-                                    <th>Threat Category</th>
-                                    <th>Severity</th>
-                                    <th>Payload Preview</th>
-                                </tr>
-                            </thead>
-                            <tbody></tbody>
-                        </table>
+                <div style="display: grid; grid-template-columns: 2.2fr 1fr; gap: 24px;">
+                    <!-- Left: Live Log -->
+                    <div class="card" style="margin-bottom: 0;">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Live Threat Log</h3>
+                        <div style="overflow-x: auto;">
+                            <table id="live-threat-table">
+                                <thead>
+                                    <tr>
+                                        <th>Timestamp</th>
+                                        <th>Source IP</th>
+                                        <th>Destination IP</th>
+                                        <th>Threat Category</th>
+                                        <th>Severity</th>
+                                        <th>Payload Preview</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Right: Active Nodes -->
+                    <div class="card" style="margin-bottom: 0;">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Cluster Nodes</h3>
+                        <div style="display: flex; flex-direction: column; gap: 12px;" id="overview-nodes-list"></div>
                     </div>
                 </div>
             </div>
@@ -533,19 +593,36 @@
                     document.getElementById('stat-agents').innerText = `${agents.filter(a => a.status === 'active').length} / ${agents.length}`;
                     
                     const agentsList = document.getElementById('agents-list');
-                    agentsList.innerHTML = agents.map(a => `
-                        <div class="card" style="display: flex; justify-content: space-between; align-items: center; padding: 16px; margin: 0;">
-                            <div>
-                                <strong style="color: #fff;">${a.hostname}</strong>
-                                <div style="font-size: 0.75rem; color: #9ca3af; font-family: monospace; margin-top: 4px;">IP: ${a.ip} | UUID: ${a.uuid.substring(0,16)}...</div>
+                    if (agentsList) {
+                        agentsList.innerHTML = agents.map(a => `
+                            <div class="card" style="display: flex; justify-content: space-between; align-items: center; padding: 16px; margin: 0;">
+                                <div>
+                                    <strong style="color: #fff;">${a.hostname}</strong>
+                                    <div style="font-size: 0.75rem; color: #9ca3af; font-family: monospace; margin-top: 4px;">IP: ${a.ip} | UUID: ${a.uuid.substring(0,16)}...</div>
+                                </div>
+                                <span class="badge ${a.status === 'active' ? 'badge-info' : 'badge-warning'}">${a.status.toUpperCase()}</span>
                             </div>
-                            <span class="badge ${a.status === 'active' ? 'badge-info' : 'badge-warning'}">${a.status.toUpperCase()}</span>
-                        </div>
-                    `).join('');
+                        `).join('');
+                    }
 
-                    // Populate select
+                    const overviewNodesList = document.getElementById('overview-nodes-list');
+                    if (overviewNodesList) {
+                        overviewNodesList.innerHTML = agents.map(a => `
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #111827;">
+                                <div>
+                                    <strong style="color: #fff; font-size: 0.85rem;">${a.hostname}</strong>
+                                    <div style="font-size: 0.7rem; color: #9ca3af; font-family: monospace; margin-top: 2px;">IP: ${a.ip}</div>
+                                </div>
+                                <span class="badge ${a.status === 'active' ? 'badge-info' : 'badge-warning'}" style="font-size: 0.65rem;">${a.status.toUpperCase()}</span>
+                            </div>
+                        `).join('');
+                    }
+
+                    // Populate select dropdown
                     const select = document.getElementById('block-agent-uuid');
-                    select.innerHTML = agents.map(a => `<option value="${a.uuid}">${a.hostname} (${a.uuid.substring(0,8)})</option>`).join('');
+                    if (select) {
+                        select.innerHTML = agents.map(a => `<option value="${a.uuid}">${a.hostname} (${a.uuid.substring(0,8)})</option>`).join('');
+                    }
                 }
 
                 // 4. Reputation
@@ -712,9 +789,65 @@
             }
         });
 
-        // Initialize
-        fetchData();
-        setInterval(fetchData, 5000);
+        // Check session token status
+        function checkSession() {
+            const token = sessionStorage.getItem('session_token');
+            const overlay = document.getElementById('login-overlay');
+            if (token) {
+                overlay.style.display = 'none';
+            } else {
+                overlay.style.display = 'flex';
+            }
+        }
+
+        // Login Handler submission
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('login-username').value;
+            const password = document.getElementById('login-password').value;
+            const errorEl = document.getElementById('login-error');
+
+            try {
+                const res = await fetch(`${API_BASE}/auth`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        sessionStorage.setItem('session_token', data.token);
+                        errorEl.style.display = 'none';
+                        checkSession();
+                        fetchData();
+                    } else {
+                        errorEl.style.display = 'block';
+                    }
+                } else {
+                    errorEl.style.display = 'block';
+                }
+            } catch (err) {
+                errorEl.style.display = 'block';
+            }
+        });
+
+        // Logout session
+        function logout() {
+            sessionStorage.removeItem('session_token');
+            checkSession();
+        }
+
+        // Initialize session check and query scheduler
+        checkSession();
+        if (sessionStorage.getItem('session_token')) {
+            fetchData();
+        }
+        setInterval(() => {
+            if (sessionStorage.getItem('session_token')) {
+                fetchData();
+            }
+        }, 5000);
     </script>
 </body>
 </html>

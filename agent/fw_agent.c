@@ -19,7 +19,7 @@
 #include "protocol.h"
 #include "pgp_wrapper.h"
 
-#define UUID_PATH "/etc/fw_inspect/agent_uuid"
+#define UUID_PATH "/etc/fw_keys/agent_uuid"
 #define BLOCKLIST_PATH "/etc/fw_inspect/blocklist.txt"
 #define UNIX_SOCK_PATH "/var/run/fw_inspect.sock"
 #define EVENT_BUFFER_SIZE 256
@@ -353,6 +353,10 @@ int main(int argc, char **argv) {
 
     connect_to_firewall();
     connect_to_soc();
+    if (soc_fd >= 0) {
+        printf("[agent] Sending initial registration ping to SOC server...\n");
+        send_to_soc(MSG_TYPE_PING, NULL, 0);
+    }
 
     load_and_push_blocklist();
 

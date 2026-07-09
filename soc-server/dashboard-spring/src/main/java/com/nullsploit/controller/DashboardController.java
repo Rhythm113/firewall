@@ -5,8 +5,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.OutputStream;
+import java.io.File;
+import java.io.FileReader;
+import java.io.BufferedReader;
 import java.net.Socket;
 import java.util.*;
+import org.springframework.security.crypto.bcrypt.BCrypt;
 
 @RestController
 @CrossOrigin(origins = "*")
@@ -66,12 +70,54 @@ public class DashboardController {
         );
     }
 
-    // 3. Agents List
+    // 3. Agents List (Dynamically calculates online/offline status based on 30-sec heartbeat window)
     @GetMapping("/agents")
     public List<Map<String, Object>> getAgents() {
         return jdbc.queryForList(
-            "SELECT encode(uuid, 'hex') as uuid, hostname, ip, status, last_seen FROM agents"
+            "SELECT encode(uuid, 'hex') as uuid, hostname, ip, " +
+            "CASE WHEN last_seen >= CURRENT_TIMESTAMP - INTERVAL '30 seconds' THEN 'active' ELSE 'offline' END as status, " +
+            "last_seen FROM agents"
         );
+    }
+
+    // 3b. Dashboard Authentication
+    @PostMapping("/auth")
+    public Map<String, Object> login(@RequestBody Map<String, String> credentials) {
+        String username = credentials.get("username");
+        String password = credentials.get("password");
+        Map<String, Object> res = new HashMap<>();
+
+        if (verifyUser(username, password)) {
+            res.put("status", "success");
+            res.put("token", UUID.randomUUID().toString());
+        } else {
+            res.put("status", "failed");
+        }
+        return res;
+    }
+
+    private boolean verifyUser(String username, String password) {
+        try {
+            File file = new File("/etc/soc/users.conf");
+            if (!file.exists()) {
+                // Local debug credentials fallback
+                return "admin".equals(username) && "password".equals(password);
+            }
+            try (BufferedReader br = new BufferedReader(new FileReader(file))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    line = line.trim();
+                    if (line.startsWith("#") || line.isEmpty()) continue;
+                    String[] parts = line.split(":", 2);
+                    if (parts.length == 2 && parts[0].equals(username)) {
+                        return BCrypt.checkpw(password, parts[1]);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return false;
     }
 
     // 4. Delete Agent

@@ -1,21 +1,38 @@
 version: '3.8'
 
 services:
-  apache-server:
+  apache-server-1:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: apache-2.4.26
+    container_name: apache-2.4.26-node1
     cap_add:
-      - NET_ADMIN          # Required for Netfilter iptables and NFQUEUE inside the container
+      - NET_ADMIN
     ports:
-      - "80:80"            # Exposed on localhost and LAN IP
+      - "80:80"            # Exposed Node 1 on port 80
     environment:
       - UPLOAD_DIR=/var/www/uploads
     volumes:
       - ./signatures:/etc/fw_inspect
+      - ./keys/agent1:/etc/fw_keys
+    depends_on:
+      - soc-server
+    restart: unless-stopped
 
-      - ./keys:/etc/fw_keys
+  apache-server-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: apache-2.4.26-node2
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "81:80"            # Exposed Node 2 on port 81
+    environment:
+      - UPLOAD_DIR=/var/www/uploads
+    volumes:
+      - ./signatures:/etc/fw_inspect
+      - ./keys/agent2:/etc/fw_keys
     depends_on:
       - soc-server
     restart: unless-stopped

