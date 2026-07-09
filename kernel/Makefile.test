@@ -1,0 +1,20 @@
+CC = gcc
+CFLAGS = -O2 -Wall -DBUILD_USERSPACE -pthread
+
+SRCS = test_runner.c http_inspect.c ip_blocklist.c tcp_monitor.c
+OBJS = $(SRCS:.c=.o)
+TARGET = test_runner
+
+all: $(TARGET) run
+
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) $(OBJS) -o $(TARGET)
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+run:
+	./$(TARGET)
+
+clean:
+	rm -f $(TARGET) *.o

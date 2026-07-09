@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  apache-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: apache-2.4.26
+    cap_add:
+      - NET_ADMIN          # Required for Netfilter iptables and NFQUEUE inside the container
+    ports:
+      - "80:80"            # Exposed on localhost and LAN IP
+    volumes:
+      - ./signatures:/etc/fw_inspect:ro
+      - ./keys:/etc/fw_keys
+    depends_on:
+      - soc-server
+    restart: unless-stopped
+
+  soc-server:
+    build:
+      context: ./soc-server
+      dockerfile: Dockerfile
+    container_name: soc-dashboard
+    ports:
+      - "1113:1113"        # PGP-encrypted agent ingest port
+      - "8443:8443"        # Web dashboard port (IP whitelisted + bcrypt login)
+    volumes:
+      - soc-data:/var/lib/soc
+      - ./keys:/etc/keys
+      - ./soc-config:/etc/soc:ro
+    restart: unless-stopped
+
+volumes:
+  soc-data:

@@ -1,0 +1,552 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage{courier}
+\renewcommand{\familydefault}{\ttdefault}
+\usepackage[margin=0.8in]{geometry}
+\usepackage{enumitem}
+\usepackage{setspace}
+\usepackage{listings}
+\usepackage{array}
+\usepackage{fancyhdr}
+\usepackage{tcolorbox}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{1.1em}
+\setlength{\tabcolsep}{4pt}
+\setlength{\extrarowheight}{3pt}
+\pagestyle{plain}
+\doublespacing
+
+% Use - instead of bullet dot for lists, and set tight spacing
+\setlist[itemize]{label=-, leftmargin=2em, nosep, itemsep=0.3em}
+
+% Code listings style (white/light mode, courier font)
+\lstset{
+  backgroundcolor=\color{white},
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  framerule=0.5pt,
+  rulecolor=\color{black},
+  xleftmargin=10pt, xrightmargin=10pt,
+  aboveskip=8pt, belowskip=8pt,
+  showstringspaces=false,
+  upquote=true,
+  tabsize=4,
+  columns=flexible
+}
+
+% Code block environment (verbatim matching Courier format)
+\lstnewenvironment{codeblock}
+  {\lstset{aboveskip=0pt,belowskip=0pt}}
+  {}
+
+% Table helpers
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}
+\newcommand{\thfmt}[1]{\textbf{#1}}
+\newcommand{\tcfmt}[1]{#1}
+
+\begin{document}
+\raggedright
+
+============================================================\\
+\textbf{NULLSPLOIT TECHNICAL DOCUMENTATION}\\
+\textbf{KERNEL FIREWALL \& SECURITY OPERATIONS CENTER}\\
+\textbf{TECHNICAL ARCHITECTURE \& OPERATIONS MANUAL}\\
+============================================================
+
+\textbf{CLASSIFICATION:}\\
+Internal Use Only
+
+\textbf{DETAILS:}\\
+Version: 1.0\\
+Date: July 2026\\
+Platform: Linux Netfilter/NFQUEUE, Docker\\
+Status: Approved Documentation
+
+\vspace{1.5em}
+\textbf{1. EXECUTIVE SUMMARY}\\
+------------------------------------------------------------\\
+Nullsploit is a hybrid kernel-userspace network security stack designed to protect Apache web servers from common Layer 4 and Layer 7 network attacks. The system intercepts traffic using Linux's \textbf{Netfilter NFQUEUE} framework, inspects packets for known threat signatures, and forwards encrypted telemetry to a centralised SOC dashboard for real-time monitoring and historical analysis.
+
+The stack has four tightly-integrated components: a userspace NFQUEUE firewall daemon (\texttt{fw\_nfq}), a telemetry agent (\texttt{fw\_agent}), a PGP-encrypted ingest receiver (\texttt{soc\_receiver}), and a real-time web dashboard. These are packaged as isolated Docker containers.
+
+\textbf{1.1 Key Capabilities}\\
+Below is a summary of the technical defense mechanisms and architectural features provided by the Nullsploit stack:
+
+\begin{center}
+\begin{tabular}{L{4.5cm} L{10cm}}
+\hline
+\thfmt{Capability} & \thfmt{Description} \\
+\hline
+PHP Shell Detection  & Pattern matching against RCE function signatures in URI and body \\
+XSS Detection        & Case-insensitive scan for cross-site scripting vectors \\
+SYN Flood Mitigation & Sliding-window rate limiting on TCP SYN packets per source IP \\
+Slowloris Detection  & Timeout-based tracking of incomplete HTTP header connections \\
+IP Blocklist         & CIDR-range lookups in a kernel-side hash table; hot-reloadable \\
+PGP Encryption       & All agent-to-SOC telemetry encrypted with GPG public-key crypto \\
+Live Dashboard       & SSE live event feed with Chart.js visualisations on port 8443 \\
+Secure Auth          & bcrypt passwords, HMAC-SHA256 signed session tokens \\
+\hline
+\end{tabular}
+\end{center}
+
+\vspace{1.5em}
+\textbf{2. SYSTEM ARCHITECTURE OVERVIEW}\\
+------------------------------------------------------------\\
+The operational flow begins at the packet interception layer and moves up through userspace analysis to secure telemetry transmission and graphical presentation.
+
+\begin{center}
+\begin{tabular}{L{3.5cm} L{3.5cm} L{7.5cm}}
+\hline
+\thfmt{Layer} & \thfmt{Component} & \thfmt{Role} \\
+\hline
+Network L4/L7 & iptables NFQUEUE & Redirect TCP/80 to queue 0 for userspace inspection \\
+Userspace     & fw\_nfq Daemon   & Dequeue packets, inspect, issue NF\_ACCEPT or NF\_DROP \\
+IPC           & UNIX Socket      & Transfer fw\_event structs from fw\_nfq to fw\_agent \\
+Telemetry     & fw\_agent        & PGP-encrypt; send instantly (WARNING+) or batch (INFO) \\
+Transport     & TCP Port 1113    & Encrypted channel to the SOC container \\
+Ingest        & soc\_receiver    & epoll loop, decrypts PGP payloads, writes to SQLite \\
+Storage       & SQLite           & Persistent event store at /var/lib/soc/soc.db \\
+Presentation  & Web Dashboard    & REST API, SSE live feed, Chart.js on port 8443 \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{2.1 Container Network Topology}\\
+Both containers share the Docker bridge network. Service discovery uses container names as DNS hostnames. PGP keys are exchanged via a shared host volume at \texttt{./keys}.
+
+\newpage
+\textbf{2.2 Architecture Diagram}\\
+The visual flow below details packet redirection and telemetry pathways:
+
+\begin{codeblock}
+  [ Attacker / Internet ]
+          |  TCP:80
+          v
+  +-----------------------------------+
+  |     APACHE SERVER CONTAINER       |
+  |  iptables -> NFQUEUE (queue 0)    |
+  |        fw_nfq daemon              |
+  |     (inspect packet payloads)     |
+  |              |  UNIX IPC          |
+  |          fw_agent                 |
+  |      (PGP encrypt & send)         |
+  +-------------+---------------------+
+                |   TCP:1113  (PGP)
+                v
+  +-----------------------------------+
+  |      SOC SERVER CONTAINER         |
+  |       soc_receiver daemon         |
+  |   (epoll / decrypt / SQLite)      |
+  |   SQLite DB  |  Web API :8443     |
+  |         Nullsploit Dashboard      |
+  +-----------------------------------+
+\end{codeblock}
+
+\vspace{1.5em}
+\textbf{3. COMPONENT: KERNEL FIREWALL (\texttt{fw\_nfq})}\\
+------------------------------------------------------------\\
+The daemon processes incoming frames bound to NFQUEUE queue 0. The raw packet capture is achieved using the iptables rule configured at system initialization:
+
+\begin{codeblock}
+iptables -A INPUT -p tcp --dport 80 -j NFQUEUE --queue-num 0
+\end{codeblock}
+
+Each packet is evaluated sequentially against the following processing table:
+
+\begin{center}
+\begin{tabular}{C{1.2cm} L{5.2cm} L{8.1cm}}
+\hline
+\thfmt{Step} & \thfmt{Function} & \thfmt{Action on Detection} \\
+\hline
+1 & inspect\_\allowbreak ip\_\allowbreak blocklist() & Immediately issue NF\_DROP \\
+2 & monitor\_\allowbreak tcp\_\allowbreak stats()    & NF\_DROP on SYN flood or Slowloris timeout \\
+3 & inspect\_\allowbreak http\_\allowbreak payload() & NF\_DROP on PHP shell or XSS match \\
+4 & (none)                   & Issue NF\_ACCEPT --- forward to Apache \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{3.1 Telemetry Struct (\texttt{fw\_event})}\\
+When a signature match or threshold violation is verified, the event parameters are packaged using the following binary structure and transmitted over a local UNIX socket at \texttt{/var/run/fw\_inspect.sock}:
+
+\begin{codeblock}
+struct fw_event {
+    uint64_t  timestamp;
+    uint32_t  src_ip;          /* Source IP (network byte order)        */
+    uint32_t  dest_ip;
+    uint16_t  src_port;
+    uint16_t  dest_port;
+    uint8_t   threat_type;     /* 1=PHP_SHELL 2=XSS 3=SYN_FLOOD 4=SLOWLORIS */
+    uint8_t   severity;        /* 0=INFO  1=WARNING  2=CRITICAL         */
+    char      payload_preview[128];
+    char      details[256];
+};
+\end{codeblock}
+
+\vspace{1.5em}
+\textbf{4. COMPONENT: USERSPACE AGENT (\texttt{fw\_agent})}\\
+------------------------------------------------------------\\
+The agent acts as a message broker between the raw socket inspector and the encrypted remote network backend. It implements hot-reloading configurations and real-time alert processing.
+
+\textbf{4.1 Message Severity and Routing Policy}\\
+The agent processes alerts based on severity profiles:
+
+\begin{center}
+\begin{tabular}{L{3.5cm} C{1.5cm} L{4cm} L{5.4cm}}
+\hline
+\thfmt{Severity} & \thfmt{Value} & \thfmt{Examples} & \thfmt{Routing} \\
+\hline
+CRITICAL & 2 & PHP Shell, SYN Flood       & Sent immediately (bypasses buffer) \\
+WARNING  & 1 & XSS, Slowloris, Blocklist  & Sent immediately (bypasses buffer) \\
+INFO     & 0 & Normal traffic metadata    & Buffered; flushed every 5 minutes \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{4.2 Heartbeat Protocol and Reload Sequence}\\
+A keep-alive ping (\texttt{MSG\_TYPE\_PING}) is sent when the channel is idle for 5 minutes. On receiving a \texttt{SIGHUP} signal, the agent re-reads the configuration file and flushes dynamic entries to the kernel hook:
+
+\begin{codeblock}
+# /etc/fw_inspect/blocklist.txt
+# One CIDR entry per line
+10.0.0.0/8
+192.168.1.50/32
+\end{codeblock}
+
+\vspace{1.5em}
+\textbf{5. COMPONENT: SOC RECEIVER (\texttt{soc\_receiver})}\\
+------------------------------------------------------------\\
+The endpoint engine is written in C as a single-threaded server leveraging \texttt{epoll(7)}. It processes agent streams, decryption, database persistence, and websocket/SSE events on distinct ports.
+
+\textbf{5.1 Decryption Pipeline}\\
+Encrypted payloads received from verified agents are processed via a system execution fork using the GnuPG backend wrapper:
+
+\begin{codeblock}
+gpg --decrypt --batch --yes --output /tmp/event.bin /tmp/event.pgp
+\end{codeblock}
+
+Decrypted telemetry is extracted into memory, verified against buffer limits, and inserted into the SQLite database. Registered web browsers connected to \texttt{/api/events/live} are simultaneously notified using Server-Sent Events (SSE).
+
+\vspace{1.5em}
+\textbf{6. COMPONENT: WEB DASHBOARD}\\
+------------------------------------------------------------\\
+The front-end user interface is structured as a single-page application (SPA) built using native web components and vanilla CSS. It offers charts, tables, and system logs.
+
+\textbf{6.1 UI Management Panels}\\
+The console layout contains five essential operational sectors:
+
+\begin{center}
+\begin{tabular}{L{4cm} L{10.5cm}}
+\hline
+\thfmt{Panel} & \thfmt{Description} \\
+\hline
+Threat Chart       & Bar chart: event counts per threat type over time \\
+Active Agents      & Lists all nodes with IPs and last-seen timestamps \\
+Live Activity Feed & Real-time scrolling event feed via SSE \\
+Historical Events  & Paginated event table from SQLite via /api/events \\
+Stats Overview     & Total events, unique IPs, threat breakdown cards \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{6.2 Application REST API Specifications}\\
+Inter-system API communication utilizes the following endpoints:
+
+\begin{center}
+\begin{tabular}{C{2.0cm} L{4.2cm} L{8.3cm}}
+\hline
+\thfmt{Method} & \thfmt{Endpoint} & \thfmt{Description} \\
+\hline
+POST & /auth            & Login; returns Set-Cookie: session\_token \\
+GET  & /api/\allowbreak stats       & Event counts grouped by threat\_type \\
+GET  & /api/\allowbreak agents      & List of registered agent nodes \\
+GET  & /api/\allowbreak events      & Historical events (limit/offset) \\
+GET  & /api/\allowbreak events/\allowbreak live & SSE stream of live events \\
+\hline
+\end{tabular}
+\end{center}
+
+\vspace{1.5em}
+\textbf{7. PGP ENCRYPTED TRANSPORT PROTOCOL}\\
+------------------------------------------------------------\\
+The server-agent network link is encrypted end-to-end. Public keys are generated on startup and synced using a common Docker storage volume.
+
+\textbf{7.1 Trust Key Exchange Sequence}\\
+The automated handshaking routine is defined below:
+
+\begin{center}
+\begin{tabular}{C{1.0cm} L{3.5cm} L{10.0cm}}
+\hline
+\thfmt{Step} & \thfmt{Container} & \thfmt{Action} \\
+\hline
+1 & soc-server    & Generate RSA-2048 keypair for soc@soc.local \\
+2 & soc-server    & Export public key to /etc/keys/soc\_pubkey.asc \\
+3 & apache-server & Generate RSA-2048 keypair for agent@soc.local \\
+4 & apache-server & Import SOC public key from shared volume \\
+5 & apache-server & Export agent public key to shared volume \\
+6 & soc-server    & Key watcher detects agent\_pubkey.asc (SHA-256 change) and imports \\
+7 & Both          & Trust established. Agent encrypts all messages with SOC key. \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{7.2 Frame Structure}\\
+The low-level network header prepended to the PGP ciphertext matches the following protocol struct:
+
+\begin{codeblock}
+struct soc_msg_hdr {
+    uint32_t magic;           /* 0xDEADBEEF - validates message framing     */
+    uint8_t  msg_type;        /* 0=PING  1=BATCH  2=ALERT                   */
+    uint8_t  agent_uuid[16];  /* Unique per-agent identifier                */
+    uint32_t payload_len;     /* Length of the following PGP ciphertext     */
+};
+\end{codeblock}
+
+\vspace{1.5em}
+\textbf{8. THREAT DETECTION SIGNATURES}\\
+------------------------------------------------------------\\
+Payload inspection operates on exact pattern matching targeting the HTTP parameters.
+
+\textbf{8.1 Remote Code Execution (RCE) Signatures}\\
+The stack flags known dangerous PHP executions in request paths and body arguments:
+
+\begin{center}
+\begin{tabular}{L{3.5cm} C{3cm} L{7.9cm}}
+\hline
+\thfmt{Signature} & \thfmt{Severity} & \thfmt{Example Attack} \\
+\hline
+eval(           & CRITICAL & eval(base64\_decode(\$\_POST[cmd])) \\
+system(         & CRITICAL & GET /?cmd=system(id) \\
+exec(           & CRITICAL & exec('cat /etc/passwd') \\
+shell\_exec(    & CRITICAL & shell\_exec('rm -rf /') \\
+passthru(       & CRITICAL & passthru(\$\_GET['x']) \\
+popen(          & CRITICAL & popen('ls', 'r') \\
+proc\_open(     & CRITICAL & proc\_open('whoami', ...) \\
+base64\_decode( & CRITICAL & Obfuscated payload delivery \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{8.2 Cross-Site Scripting (XSS) Patterns}\\
+The following patterns are scanned case-insensitively using custom string parsers:
+
+\begin{center}
+\begin{tabular}{L{4cm} L{10.5cm}}
+\hline
+\thfmt{Signature} & \thfmt{Attack Vector} \\
+\hline
+<script>     & Direct script injection \\
+javascript:  & Anchor href and meta refresh attacks \\
+onerror=     & Image/object error event handler injection \\
+onload=      & Body/iframe onload event injection \\
+<img         & Image tag with onerror payload \\
+alert(       & Proof-of-concept XSS marker \\
+\hline
+\end{tabular}
+\end{center}
+
+\vspace{1.5em}
+\textbf{9. PROTOCOL ATTACK MITIGATION}\\
+------------------------------------------------------------\\
+Layer 4 attacks are tracked and blocked based on stateful monitoring counters.
+
+\textbf{9.1 SYN Flood Thresholds}\\
+Mitigation uses sliding-window tracking parameters:
+
+\begin{center}
+\begin{tabular}{L{5cm} L{2.5cm} L{7cm}}
+\hline
+\thfmt{Parameter} & \thfmt{Value} & \thfmt{Description} \\
+\hline
+SYN Flood Threshold & 100/s   & Max SYN/s per source IP before blocking \\
+Window Duration     & 1 sec   & Rate counter reset interval \\
+Block Duration      & 60s     & Packets dropped until pool eviction \\
+Alert throttle      & 1/window & One SOC alert when threshold is crossed \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{9.2 Slowloris Constraints}\\
+Slow HTTP header streams are detected using connection timers:
+
+\begin{center}
+\begin{tabular}{L{5cm} L{2.5cm} L{7cm}}
+\hline
+\thfmt{Parameter} & \thfmt{Value} & \thfmt{Description} \\
+\hline
+SLOWLORIS\_TIMEOUT & 30s & Max time for HTTP headers to complete \\
+Detection basis    & Timer & Set on first packet, checked on all subsequent \\
+Action             & DROP  & Connection dropped; WARNING sent instantly to SOC \\
+\hline
+\end{tabular}
+\end{center}
+
+\vspace{1.5em}
+\textbf{10. IP BLOCKLIST HASH TABLE}\\
+------------------------------------------------------------\\
+The blocklist table utilizes an 8-bit hash index with 256 dynamic buckets to store blacklisted hosts and CIDR ranges. Updates are dynamic:
+
+\begin{codeblock}
+# /etc/fw_inspect/blocklist.txt
+10.0.0.0/8
+192.168.1.50/32
+45.33.32.0/24
+\end{codeblock}
+
+SIGHUP triggers live kernel-level updates without disconnecting current web sockets.
+
+\vspace{1.5em}
+\textbf{11. AUTHENTICATION \& ACCESS CONTROL}\\
+------------------------------------------------------------\\
+Access rules are enforced before requests hit the application layer.
+
+\textbf{11.1 Allowed Administrator IP Ranges}\\
+Only the following network origins can access port 8443:
+
+\begin{center}
+\begin{tabular}{L{4cm} L{10.5cm}}
+\hline
+\thfmt{Range} & \thfmt{Purpose} \\
+\hline
+127.0.0.1/32   & Localhost administration \\
+172.16.0.0/12  & Docker bridge and internal ranges \\
+192.168.0.0/16 & LAN subnet for SOC analysts \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{11.2 Credentials Configuration}\\
+Administrators store hashed passwords in a localized flat file. Successful login returns an HMAC signature token:
+
+\begin{codeblock}
+# /etc/soc/users.conf format
+admin:$2b$12$<bcrypt_hash>
+
+# Session cookie format
+session_token=username:unix_timestamp:hmac_sha256_hex
+\end{codeblock}
+
+\vspace{1.5em}
+\textbf{12. DOCKER DEPLOYMENT SPECS}\\
+------------------------------------------------------------\\
+Container constraints are mapped using the compose configuration schema:
+
+\begin{center}
+\begin{tabular}{L{3.5cm} L{5.5cm} L{5.5cm}}
+\hline
+\thfmt{Parameter} & \thfmt{apache-server} & \thfmt{soc-server} \\
+\hline
+Base Image    & debian:bullseye-slim & debian:bullseye-slim \\
+Exposed Ports & 80 (HTTP)            & 1113 (agent), 8443 (web) \\
+Capabilities  & NET\_ADMIN (iptables) & None \\
+Volumes       & ./signatures, ./keys & ./keys, soc-data (SQLite) \\
+Restart       & unless-stopped       & unless-stopped \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{12.1 Manual Operational Triggers}\\
+Deployment and control actions are initiated using the commands below:
+
+\begin{codeblock}
+# Full clean start (wipes database and keys)
+docker compose down -v
+docker compose up -d --build
+
+# Hot-reload blocklist without restart
+docker exec apache-2.4.26 kill -HUP $(pidof fw_agent)
+\end{codeblock}
+
+\vspace{1.5em}
+\textbf{13. TESTING AND ENGINE VALIDATION}\\
+------------------------------------------------------------\\
+Local validation runs a mock environment using \texttt{userspace\_compat.h} shims:
+
+\begin{center}
+\begin{tabular}{L{2.8cm} L{5.4cm} L{3.8cm} C{2.4cm}}
+\hline
+\thfmt{Test} & \thfmt{Input} & \thfmt{Expected} & \thfmt{Result} \\
+\hline
+HTTP T1      & GET /index.html              & ALLOW            & PASS \\
+HTTP T2      & POST body: eval(data)         & DROP - PHP Shell & PASS \\
+HTTP T3      & GET /?q=<script>alert(1)      & DROP - XSS       & PASS \\
+HTTP T4      & GET /?name=\allowbreak systematic\_\allowbreak eval   & ALLOW (no FP)    & PASS \\
+Blocklist T1 & 192.168.1.50 (exact)          & DROP             & PASS \\
+Blocklist T2 & 192.168.1.51 (unlisted)       & ALLOW            & PASS \\
+Blocklist T3 & 10.250.4.5 in 10.0.0.0/8      & DROP             & PASS \\
+Blocklist T4 & 11.0.0.1 outside subnet       & ALLOW            & PASS \\
+SYN T1       & 101 SYN/s from one IP         & DROP + ALERT     & PASS \\
+SYN T2       & 50 SYN/s from one IP          & ALLOW            & PASS \\
+Slowloris T1 & Headers incomplete after 30s  & DROP + ALERT     & PASS \\
+\hline
+\end{tabular}
+\end{center}
+
+\vspace{1.5em}
+\textbf{14. SYSTEM OPERATIONS GUIDE}\\
+------------------------------------------------------------\\
+Daily configuration rules and references are documented below.
+
+\textbf{14.1 Login Details}\\
+Connection targets for security analysts:
+
+\begin{center}
+\begin{tabular}{L{4cm} L{10.5cm}}
+\hline
+\thfmt{Field} & \thfmt{Value} \\
+\hline
+Local URL  & http://127.0.0.1:8443/ \\
+LAN URL    & http://<your-lan-ip>:8443/ \\
+Username   & admin \\
+Password   & password \\
+\hline
+\end{tabular}
+\end{center}
+
+\newpage
+\textbf{14.2 Threat Types Reference}\\
+Telemetry codes returned by the threat detection system:
+
+\begin{center}
+\begin{tabular}{C{2.5cm} L{3cm} C{3.5cm} L{5cm}}
+\hline
+\thfmt{threat\_\allowbreak type} & \thfmt{Name} & \thfmt{Severity} & \thfmt{Description} \\
+\hline
+1 & PHP Shell    & CRITICAL & RCE via PHP built-in functions \\
+2 & XSS          & WARNING  & Cross-site scripting payload detected \\
+3 & SYN Flood    & CRITICAL & SYN packet rate exceeds threshold \\
+4 & Slowloris    & WARNING  & Incomplete HTTP header connection timeout \\
+5 & IP Blocklist & WARNING  & Connection from known malicious IP \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{14.3 Maintenance Command Cheat-Sheet}\\
+Operational utilities for log monitoring and manual configuration:
+
+\begin{codeblock}
+# Firewall verdicts and alerts
+docker exec apache-2.4.26 cat /var/log/fw_nfq.log
+
+# Agent routing and SOC transmissions
+docker exec apache-2.4.26 cat /var/log/fw_agent.log
+
+# SOC receiver log
+docker logs soc-dashboard
+
+# Query events via API
+curl -b cookies.txt http://127.0.0.1:8443/api/events
+
+# Add IPs to blocklist then hot-reload
+notepad signatures/blocklist.txt
+docker exec apache-2.4.26 kill -HUP $(pidof fw_agent)
+\end{codeblock}
+
+============================================================\\
+\textbf{END OF REPORT}\\
+============================================================
+
+\end{document}

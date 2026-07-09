@@ -1,0 +1,104 @@
+# ============================================================
+# NullSploit Apache Firewall - .gitignore
+# ============================================================
+
+# --- C Build Artifacts ---
+*.o
+*.ko
+*.obj
+*.elf
+*.so
+*.so.*
+*.a
+*.lib
+*.dylib
+*.out
+*.d
+*.dSYM/
+fw_nfq
+fw_agent
+soc_receiver
+test_runner
+*.mod.c
+*.mod
+modules.order
+Module.symvers
+
+# --- eBPF/XDP ---
+*.bpf.o
+*.skel.h
+vmlinux.h
+
+# --- Private Keys & Secrets ---
+keys/soc_privkey.asc
+keys/agent_privkey.asc
+*.pem
+*.key
+*.p12
+*.pfx
+.env
+.env.local
+.env.*.local
+
+# --- Database ---
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# --- Node.js (Dashboard) ---
+node_modules/
+.next/
+out/
+dist/
+.turbo/
+.vercel/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+package-lock.json
+
+# --- Docker ---
+docker-compose.override.yml
+
+# --- OS Files ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+
+# --- IDE ---
+.vscode/
+.idea/
+*.iml
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# --- YARA ---
+signatures/yara/*.compiled
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Misc ---
+*.bak
+*.tmp
+*.temp
+*.orig
+*.pid
+core
+core.*
+
+# --- Generated Documentation ---
+*.aux
+*.fdb_latexmk
+*.fls
+*.synctex.gz
