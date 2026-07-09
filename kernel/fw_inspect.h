@@ -22,6 +22,15 @@
 #define THREAT_SYN_FLOOD   3
 #define THREAT_SLOWLORIS   4
 #define THREAT_BLOCKLIST   5
+#define THREAT_SQLI        6
+#define THREAT_CMDI        7
+#define THREAT_PATH_TRAV   8
+#define THREAT_LFI         9
+#define THREAT_RFI         10
+#define THREAT_BOT         11
+#define THREAT_YARA        12
+#define THREAT_REPUTATION  13
+
 
 // Struct sent from kernel to userspace agent via Netlink
 struct fw_event {

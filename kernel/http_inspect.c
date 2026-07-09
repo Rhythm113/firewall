@@ -7,6 +7,12 @@
 #include <linux/skbuff.h>
 #endif
 #include "fw_inspect.h"
+#include "sqli_detect.h"
+#include "cmdi_detect.h"
+#include "path_detect.h"
+#include "bot_detect.h"
+#include "yara_engine.h"
+#include "ip_reputation.h"
 
 // External callback to send event to userspace
 extern void send_fw_event(struct fw_event *event);
@@ -81,8 +87,7 @@ int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct tcphdr *
     }
 
     // Pull or map skb data to make sure it's linear and accessible
-    // In production, we'd use skb_header_pointer, but for simplicity:
-    if (!pskb_may_pull(skb, payload_offset + (payload_len > 512 ? 512 : payload_len))) {
+    if (!pskb_may_pull(skb, payload_offset + (payload_len > 1024 ? 1024 : payload_len))) {
         return 0; // Can't pull skb data safely
     }
 
@@ -91,9 +96,90 @@ int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct tcphdr *
     tcph = tcp_hdr(skb);
     payload = skb->data + payload_offset;
 
-    // 1. Scan for PHP Shell Signatures
+    // We can limit scan depth for inline to prevent performance degradation
+    int scan_len = payload_len > 2048 ? 2048 : payload_len;
+
+    char pattern[128];
+    char details[256];
+
+    // 1. Scan for SQL Injection
+    if (detect_sqli((const char *)payload, scan_len, pattern, sizeof(pattern), details, sizeof(details)) >= 40) {
+        struct fw_event event = {
+            .timestamp = ktime_get_real_seconds(),
+            .src_ip = iph->saddr,
+            .dest_ip = iph->daddr,
+            .src_port = tcph->source,
+            .dest_port = tcph->dest,
+            .threat_type = THREAT_SQLI,
+            .severity = SEVERITY_CRITICAL,
+        };
+        strncpy(event.payload_preview, pattern, sizeof(event.payload_preview) - 1);
+        strncpy(event.details, details, sizeof(event.details) - 1);
+        send_fw_event(&event);
+        update_ip_reputation(iph->saddr, 20, THREAT_SQLI);
+        return 1;
+    }
+
+    // 2. Scan for Command Injection
+    if (detect_cmdi((const char *)payload, scan_len, pattern, sizeof(pattern), details, sizeof(details)) >= 40) {
+        struct fw_event event = {
+            .timestamp = ktime_get_real_seconds(),
+            .src_ip = iph->saddr,
+            .dest_ip = iph->daddr,
+            .src_port = tcph->source,
+            .dest_port = tcph->dest,
+            .threat_type = THREAT_CMDI,
+            .severity = SEVERITY_CRITICAL,
+        };
+        strncpy(event.payload_preview, pattern, sizeof(event.payload_preview) - 1);
+        strncpy(event.details, details, sizeof(event.details) - 1);
+        send_fw_event(&event);
+        update_ip_reputation(iph->saddr, 20, THREAT_CMDI);
+        return 1;
+    }
+
+    // 3. Scan for Path Traversal / LFI / RFI
+    if (detect_path_traversal((const char *)payload, scan_len, pattern, sizeof(pattern), details, sizeof(details)) >= 40) {
+        struct fw_event event = {
+            .timestamp = ktime_get_real_seconds(),
+            .src_ip = iph->saddr,
+            .dest_ip = iph->daddr,
+            .src_port = tcph->source,
+            .dest_port = tcph->dest,
+            .threat_type = THREAT_PATH_TRAV,
+            .severity = SEVERITY_CRITICAL,
+        };
+        if (strstr(pattern, "RFI")) event.threat_type = THREAT_RFI;
+        else if (strstr(pattern, "LFI")) event.threat_type = THREAT_LFI;
+
+        strncpy(event.payload_preview, pattern, sizeof(event.payload_preview) - 1);
+        strncpy(event.details, details, sizeof(event.details) - 1);
+        send_fw_event(&event);
+        update_ip_reputation(iph->saddr, 20, event.threat_type);
+        return 1;
+    }
+
+    // 4. Scan for Bot / Scanner indicators
+    if (detect_bot((const char *)payload, scan_len, pattern, sizeof(pattern), details, sizeof(details)) >= 40) {
+        struct fw_event event = {
+            .timestamp = ktime_get_real_seconds(),
+            .src_ip = iph->saddr,
+            .dest_ip = iph->daddr,
+            .src_port = tcph->source,
+            .dest_port = tcph->dest,
+            .threat_type = THREAT_BOT,
+            .severity = SEVERITY_WARNING,
+        };
+        strncpy(event.payload_preview, pattern, sizeof(event.payload_preview) - 1);
+        strncpy(event.details, details, sizeof(event.details) - 1);
+        send_fw_event(&event);
+        update_ip_reputation(iph->saddr, 15, THREAT_BOT);
+        return 1;
+    }
+
+    // 5. Scan for PHP Shell Signatures (existing checks)
     for (i = 0; i < num_php_sigs; i++) {
-        if (k_strstr((const char *)payload, payload_len, php_signatures[i], php_sig_lens[i])) {
+        if (k_strstr((const char *)payload, scan_len, php_signatures[i], php_sig_lens[i])) {
             struct fw_event event = {
                 .timestamp = ktime_get_real_seconds(),
                 .src_ip = iph->saddr,
@@ -104,18 +190,18 @@ int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct tcphdr *
                 .severity = SEVERITY_CRITICAL,
             };
             snprintf(event.payload_preview, sizeof(event.payload_preview), "PHP Shell: %s", php_signatures[i]);
-            // Copy up to 255 bytes of payload for logs
-            memcpy(event.details, payload, payload_len > 255 ? 255 : payload_len);
-            event.details[payload_len > 255 ? 255 : payload_len] = '\0';
+            memcpy(event.details, payload, scan_len > 255 ? 255 : scan_len);
+            event.details[scan_len > 255 ? 255 : scan_len] = '\0';
             
             send_fw_event(&event);
+            update_ip_reputation(iph->saddr, 25, THREAT_PHP_SHELL);
             return 1; // Drop packet
         }
     }
 
-    // 2. Scan for XSS Signatures (Case Insensitive)
+    // 6. Scan for XSS Signatures (existing checks)
     for (i = 0; i < num_xss_sigs; i++) {
-        if (k_stristr((const char *)payload, payload_len, xss_signatures[i], xss_sig_lens[i])) {
+        if (k_stristr((const char *)payload, scan_len, xss_signatures[i], xss_sig_lens[i])) {
             struct fw_event event = {
                 .timestamp = ktime_get_real_seconds(),
                 .src_ip = iph->saddr,
@@ -126,12 +212,31 @@ int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct tcphdr *
                 .severity = SEVERITY_WARNING,
             };
             snprintf(event.payload_preview, sizeof(event.payload_preview), "XSS Detected: %s", xss_signatures[i]);
-            memcpy(event.details, payload, payload_len > 255 ? 255 : payload_len);
-            event.details[payload_len > 255 ? 255 : payload_len] = '\0';
+            memcpy(event.details, payload, scan_len > 255 ? 255 : scan_len);
+            event.details[scan_len > 255 ? 255 : scan_len] = '\0';
             
             send_fw_event(&event);
+            update_ip_reputation(iph->saddr, 10, THREAT_XSS);
             return 1; // Drop packet
         }
+    }
+
+    // 7. YARA Inline matching (last, heavier)
+    if (scan_mem_yara((const char *)payload, scan_len, pattern, sizeof(pattern)) > 0) {
+        struct fw_event event = {
+            .timestamp = ktime_get_real_seconds(),
+            .src_ip = iph->saddr,
+            .dest_ip = iph->daddr,
+            .src_port = tcph->source,
+            .dest_port = tcph->dest,
+            .threat_type = THREAT_YARA,
+            .severity = SEVERITY_CRITICAL,
+        };
+        snprintf(event.payload_preview, sizeof(event.payload_preview), "YARA matched: %s", pattern);
+        snprintf(event.details, sizeof(event.details), "HTTP payload triggered inline YARA rule %s", pattern);
+        send_fw_event(&event);
+        update_ip_reputation(iph->saddr, 30, THREAT_YARA);
+        return 1;
     }
 
     return 0; // Accept packet

@@ -24,12 +24,34 @@ services:
     container_name: soc-dashboard
     ports:
       - "1113:1113"        # PGP-encrypted agent ingest port
-      - "8443:8443"        # Web dashboard port (IP whitelisted + bcrypt login)
+      - "8443:8443"        # Web dashboard port
     volumes:
       - soc-data:/var/lib/soc
       - ./keys:/etc/keys
       - ./soc-config:/etc/soc:ro
+    environment:
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGDATABASE=nullsploit
+      - PGUSER=nullsploit
+      - PGPASSWORD=nullsploit_secure
+    depends_on:
+      - postgres
     restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: soc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nullsploit
+      POSTGRES_USER: nullsploit
+      POSTGRES_PASSWORD: nullsploit_secure
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
 
 volumes:
   soc-data:
+  pg-data:

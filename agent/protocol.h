@@ -10,6 +10,11 @@
 #define MSG_TYPE_PING  0
 #define MSG_TYPE_BATCH 1
 #define MSG_TYPE_ALERT 2
+#define MSG_TYPE_BLOCK_IP      3
+#define MSG_TYPE_UNBLOCK_IP    4
+#define MSG_TYPE_CONFIG_UPDATE 5
+#define MSG_TYPE_YARA_UPDATE   6
+
 
 // Wire Protocol Header
 struct soc_msg_hdr {

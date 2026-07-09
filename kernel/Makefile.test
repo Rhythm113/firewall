@@ -1,14 +1,15 @@
 CC = gcc
-CFLAGS = -O2 -Wall -DBUILD_USERSPACE -pthread
+CFLAGS = -O2 -Wall -DBUILD_USERSPACE -pthread -DHAS_YARA
+LDFLAGS = -lyara -pthread
 
-SRCS = test_runner.c http_inspect.c ip_blocklist.c tcp_monitor.c
+SRCS = test_runner.c http_inspect.c ip_blocklist.c tcp_monitor.c sqli_detect.c cmdi_detect.c path_detect.c bot_detect.c ip_reputation.c yara_engine.c ebpf_xdp.c
 OBJS = $(SRCS:.c=.o)
 TARGET = test_runner
 
 all: $(TARGET) run
 
 $(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) $(OBJS) -o $(TARGET)
+	$(CC) $(CFLAGS) $(OBJS) -o $(TARGET) $(LDFLAGS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@

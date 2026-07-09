@@ -41,7 +41,6 @@ static void generate_uuid(uint8_t *uuid) {
     int fd = open("/dev/urandom", O_RDONLY);
     if (fd >= 0) {
         if (read(fd, uuid, 16) != 16) {
-            // Fallback to rand() if read fails
             for (int i = 0; i < 16; i++) uuid[i] = rand() % 256;
         }
         close(fd);
@@ -76,74 +75,34 @@ static void load_agent_uuid(void) {
     }
 }
 
-// Parse and load blocklist from file
-static void load_and_push_blocklist(void) {
-    printf("[agent] Loading blocklist from %s...\n", BLOCKLIST_PATH);
-    FILE *f = fopen(BLOCKLIST_PATH, "r");
-    if (!f) {
-        perror("[agent] Failed to open blocklist file");
-        return;
-    }
-
-    struct blocklist_payload payload;
-    memset(&payload, 0, sizeof(payload));
-
-    char line[128];
-    while (fgets(line, sizeof(line), f) && payload.count < MAX_BLOCKLIST_IPS) {
-        // Strip newline and whitespace
-        char *ip_str = strtok(line, " \t\r\n");
-        if (!ip_str || ip_str[0] == '#' || ip_str[0] == '\0') {
-            continue; // Skip comments/empty lines
-        }
-
-        // Parse CIDR (e.g. 192.168.1.1/24)
-        char *slash = strchr(ip_str, '/');
-        int mask = 32;
-        if (slash) {
-            *slash = '\0';
-            mask = atoi(slash + 1);
-        }
-
-        struct in_addr addr;
-        if (inet_pton(AF_INET, ip_str, &addr) == 1) {
-            payload.entries[payload.count].ip = addr.s_addr;
-            payload.entries[payload.count].mask = (uint8_t)mask;
-            payload.count++;
-        }
-    }
-    fclose(f);
-
-    printf("[agent] Loaded %d blocklist entries. Pushing to firewall...\n", payload.count);
-
+// Push blocklist payload to firewall
+static void push_blocklist_payload(struct blocklist_payload *payload) {
     if (fw_fd < 0) {
         printf("[agent] Firewall not connected. Cannot load blocklist.\n");
         return;
     }
 
     if (is_userspace_mode) {
-        // Write to userspace firewall (UNIX Socket)
-        int sent = write(fw_fd, &payload, sizeof(payload));
+        int sent = write(fw_fd, payload, sizeof(struct blocklist_payload));
         if (sent < 0) {
             perror("[agent] Failed to push blocklist to userspace firewall");
         }
     } else {
-        // Write to kernel firewall (Netlink command type 2)
         struct sockaddr_nl dest_addr;
         memset(&dest_addr, 0, sizeof(dest_addr));
         dest_addr.nl_family = AF_NETLINK;
         dest_addr.nl_pid = 0; // Kernel
         dest_addr.nl_groups = 0;
 
-        struct nlmsghdr *nlh = malloc(NLMSG_SPACE(sizeof(payload)));
-        memset(nlh, 0, NLMSG_SPACE(sizeof(payload)));
-        nlh->nlmsg_len = NLMSG_SPACE(sizeof(payload));
+        struct iovec iov;
+        struct nlmsghdr *nlh = malloc(NLMSG_SPACE(sizeof(struct blocklist_payload)));
+        memset(nlh, 0, NLMSG_SPACE(sizeof(struct blocklist_payload)));
+        nlh->nlmsg_len = NLMSG_SPACE(sizeof(struct blocklist_payload));
         nlh->nlmsg_pid = getpid();
         nlh->nlmsg_flags = 0;
-        nlh->nlmsg_type = 2; // LOAD_BLOCKLIST command
-        memcpy(NLMSG_DATA(nlh), &payload, sizeof(payload));
+        nlh->nlmsg_type = 2; // LOAD_BLOCKLIST
+        memcpy(NLMSG_DATA(nlh), payload, sizeof(struct blocklist_payload));
 
-        struct iovec iov;
-        memset(&iov, 0, sizeof(iov));
         iov.iov_base = (void *)nlh;
         iov.iov_len = nlh->nlmsg_len;
 
@@ -161,6 +120,45 @@ static void load_and_push_blocklist(void) {
     }
 }
 
+// Parse and load blocklist from file
+static void load_and_push_blocklist(void) {
+    printf("[agent] Loading blocklist from %s...\n", BLOCKLIST_PATH);
+    FILE *f = fopen(BLOCKLIST_PATH, "r");
+    if (!f) {
+        perror("[agent] Failed to open blocklist file");
+        return;
+    }
+
+    struct blocklist_payload payload;
+    memset(&payload, 0, sizeof(payload));
+
+    char line[128];
+    while (fgets(line, sizeof(line), f) && payload.count < MAX_BLOCKLIST_IPS) {
+        char *ip_str = strtok(line, " \t\r\n");
+        if (!ip_str || ip_str[0] == '#' || ip_str[0] == '\0') {
+            continue;
+        }
+
+        char *slash = strchr(ip_str, '/');
+        int mask = 32;
+        if (slash) {
+            *slash = '\0';
+            mask = atoi(slash + 1);
+        }
+
+        struct in_addr addr;
+        if (inet_pton(AF_INET, ip_str, &addr) == 1) {
+            payload.entries[payload.count].ip = addr.s_addr;
+            payload.entries[payload.count].mask = (uint8_t)mask;
+            payload.count++;
+        }
+    }
+    fclose(f);
+
+    printf("[agent] Loaded %d blocklist entries. Pushing to firewall...\n", payload.count);
+    push_blocklist_payload(&payload);
+}
+
 // Connect to the firewall (tries Netlink, fallbacks to userspace UNIX socket)
 static int connect_to_firewall(void) {
     if (fw_fd >= 0) close(fw_fd);
@@ -175,7 +173,6 @@ static int connect_to_firewall(void) {
         src_addr.nl_groups = 0;
 
         if (bind(fw_fd, (struct sockaddr *)&src_addr, sizeof(src_addr)) == 0) {
-            // Register agent with kernel
             int register_cmd = 1; // REGISTER_AGENT
             struct sockaddr_nl dest_addr;
             memset(&dest_addr, 0, sizeof(dest_addr));
@@ -296,7 +293,6 @@ static int send_to_soc(uint8_t msg_type, const void *payload_data, size_t payloa
     size_t encrypted_len = 0;
 
     if (payload_len > 0) {
-        // PGP Encrypt the payload
         if (pgp_encrypt(payload_data, payload_len, &encrypted_payload, &encrypted_len) < 0) {
             fprintf(stderr, "[agent] Failed to encrypt payload with PGP\n");
             return -1;
@@ -348,26 +344,19 @@ int main(int argc, char **argv) {
     printf("[agent] Starting Firewall Userspace Agent...\n");
     srand(time(NULL));
 
-    // Load PGP keys first or print info
     printf("[agent] Initializing PGP keys. Expecting recipient 'soc@soc.local' to be imported in GnuPG keyring.\n");
 
-    // Load UUID and setup SIGHUP handler
     load_agent_uuid();
     signal(SIGHUP, handle_sighup);
 
-    // Initial connection to firewall and SOC
     connect_to_firewall();
     connect_to_soc();
 
-    // Load initial blocklist
     load_and_push_blocklist();
 
-    // 5-minute timer parameters (300 seconds)
     time_t last_flush = time(NULL);
     const int flush_interval = 300;
 
-    // Buffer to receive messages from the firewall
-    // Netlink buffer can hold larger data, userspace UNIX reads structured fw_event
     unsigned char recv_buf[8192];
     struct sockaddr_nl nl_addr;
     struct iovec iov = {
@@ -382,18 +371,16 @@ int main(int argc, char **argv) {
     };
 
     while (1) {
-        // Trigger blocklist reload if SIGHUP received
         if (reload_requested) {
             reload_requested = 0;
             load_and_push_blocklist();
         }
 
-        // If not connected to firewall, try reconnecting
         if (fw_fd < 0) {
             sleep(2);
             connect_to_firewall();
             if (fw_fd >= 0) {
-                load_and_push_blocklist(); // Push blocklist upon reconnect
+                load_and_push_blocklist();
             }
         }
 
@@ -403,15 +390,19 @@ int main(int argc, char **argv) {
 
         if (fw_fd >= 0) {
             FD_SET(fw_fd, &read_fds);
-            max_fd = fw_fd;
+            if (fw_fd > max_fd) max_fd = fw_fd;
         }
 
-        // Set timeout to poll sockets or flush events
+        if (soc_fd >= 0) {
+            FD_SET(soc_fd, &read_fds);
+            if (soc_fd > max_fd) max_fd = soc_fd;
+        }
+
         struct timeval timeout;
         time_t now = time(NULL);
         time_t time_to_next_flush = (last_flush + flush_interval) - now;
         if (time_to_next_flush <= 0) {
-            time_to_next_flush = 1; // Trigger flush on next cycle
+            time_to_next_flush = 1;
         }
         timeout.tv_sec = time_to_next_flush;
         timeout.tv_usec = 0;
@@ -425,13 +416,71 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        // Check if we received an event from the firewall
+        // 1. Process downstream commands from SOC server
+        if (soc_fd >= 0 && FD_ISSET(soc_fd, &read_fds)) {
+            struct soc_msg_hdr soc_hdr;
+            int r = read(soc_fd, &soc_hdr, sizeof(soc_hdr));
+            if (r <= 0) {
+                printf("[agent] SOC server disconnected. Resetting connection.\n");
+                close(soc_fd);
+                soc_fd = -1;
+                continue;
+            }
+
+            if (r == sizeof(soc_hdr) && ntohl(soc_hdr.magic) == MAGIC_HEADER) {
+                uint32_t payload_len = ntohl(soc_hdr.payload_len);
+                if (payload_len > 0) {
+                    char *encrypted = malloc(payload_len);
+                    size_t total_read = 0;
+                    while (total_read < payload_len) {
+                        int read_bytes = read(soc_fd, encrypted + total_read, payload_len - total_read);
+                        if (read_bytes <= 0) break;
+                        total_read += read_bytes;
+                    }
+
+                    void *decrypted = NULL;
+                    size_t dec_len = 0;
+                    if (pgp_decrypt(encrypted, payload_len, &decrypted, &dec_len) == 0) {
+                        if (soc_hdr.msg_type == MSG_TYPE_BLOCK_IP) {
+                            // Block single IP
+                            if (dec_len >= 4) {
+                                uint32_t ip = *(uint32_t *)decrypted;
+                                char ip_str[32];
+                                struct in_addr addr = { .s_addr = ip };
+                                inet_ntop(AF_INET, &addr, ip_str, sizeof(ip_str));
+                                printf("[agent] Blocking IP: %s\n", ip_str);
+
+                                struct blocklist_payload bl;
+                                memset(&bl, 0, sizeof(bl));
+                                bl.count = 1;
+                                bl.entries[0].ip = ip;
+                                bl.entries[0].mask = 32;
+                                push_blocklist_payload(&bl);
+                            }
+                        }
+                        else if (soc_hdr.msg_type == MSG_TYPE_YARA_UPDATE) {
+                            // Yara rules update
+                            printf("[agent] Received YARA update, writing new rules\n");
+                            mkdir("/etc/fw_inspect/yara", 0755);
+                            FILE *yf = fopen("/etc/fw_inspect/yara/rules.yar", "w");
+                            if (yf) {
+                                fwrite(decrypted, 1, dec_len, yf);
+                                fclose(yf);
+                            }
+                        }
+                        free(decrypted);
+                    }
+                    free(encrypted);
+                }
+            }
+        }
+
+        // 2. Process events from firewall
         if (fw_fd >= 0 && FD_ISSET(fw_fd, &read_fds)) {
             struct fw_event event;
             int valid_event = 0;
 
             if (is_userspace_mode) {
-                // Read from UNIX client socket
                 int bytes_read = read(fw_fd, &event, sizeof(struct fw_event));
                 if (bytes_read <= 0) {
                     printf("[agent] Userspace firewall disconnected. Resetting socket.\n");
@@ -443,7 +492,6 @@ int main(int argc, char **argv) {
                     valid_event = 1;
                 }
             } else {
-                // Read from Netlink socket
                 ssize_t len = recvmsg(fw_fd, &msg, 0);
                 if (len < 0) {
                     if (errno == EAGAIN || errno == EINTR) continue;
@@ -463,12 +511,10 @@ int main(int argc, char **argv) {
                 printf("[agent] Event received: Type=%d, Severity=%d, Preview='%s'\n",
                        event.threat_type, event.severity, event.payload_preview);
 
-                // Check severity (send critical and warning threats instantly)
                 if (event.severity == SEVERITY_CRITICAL || event.severity == SEVERITY_WARNING) {
                     printf("[agent] Suspicious event detected. Triggering instant alert send...\n");
                     send_to_soc(MSG_TYPE_ALERT, &event, sizeof(struct fw_event));
                 } else {
-                    // Buffer event for batch sending (info level)
                     if (event_count < EVENT_BUFFER_SIZE) {
                         memcpy(&event_buffer[event_count], &event, sizeof(struct fw_event));
                         event_count++;
@@ -479,19 +525,17 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Check if 5-minute timer has expired
+        // 3. Heartbeat & Batch timers
         now = time(NULL);
         if (now >= last_flush + flush_interval) {
             printf("[agent] 5-minute timer triggered.\n");
             if (event_count > 0) {
-                // Send batch events
                 printf("[agent] Flushing %d batched events to SOC...\n", event_count);
                 int ret = send_to_soc(MSG_TYPE_BATCH, event_buffer, event_count * sizeof(struct fw_event));
                 if (ret == 0) {
-                    event_count = 0; // Clear buffer upon successful send
+                    event_count = 0;
                 }
             } else {
-                // Send empty heartbeat ping
                 printf("[agent] No events to report. Sending heartbeat ping to SOC...\n");
                 send_to_soc(MSG_TYPE_PING, NULL, 0);
             }

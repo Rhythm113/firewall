@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2-dev \
     libexpat1-dev \
     libnetfilter-queue-dev \
+    libyara-dev \
     zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -51,15 +52,17 @@ RUN make -C agent
 # Stage 2: Runtime stage
 FROM debian:bullseye-slim
 
-# Install runtime libraries, iptables, and gnupg
+# Install runtime libraries, iptables, gnupg, and python3 for CGI testing
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpcre3 \
     libssl1.1 \
     libxml2 \
     libexpat1 \
     libnetfilter-queue1 \
+    libyara4 \
     iptables \
     gnupg \
+    python3 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -70,8 +73,10 @@ COPY --from=builder /usr/local/apache2 /usr/local/apache2
 COPY --from=builder /usr/src/firewall/kernel/fw_nfq /usr/local/bin/fw_nfq
 COPY --from=builder /usr/src/firewall/agent/fw_agent /usr/local/bin/fw_agent
 
-# Copy custom landing page
+# Copy custom landing page & vulnerable application
 COPY index.html /usr/local/apache2/htdocs/
+COPY vulnerable-app/upload.py /usr/local/apache2/cgi-bin/upload.py
+RUN chmod +x /usr/local/apache2/cgi-bin/upload.py
 
 # Copy entrypoint script
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
@@ -83,6 +88,10 @@ ENV PATH="/usr/local/apache2/bin:${PATH}"
 # Forward Apache logs to stdout/stderr
 RUN ln -sf /proc/self/fd/1 /usr/local/apache2/logs/access_log \
     && ln -sf /proc/self/fd/2 /usr/local/apache2/logs/error_log
+
+# Create logs/signatures directories
+RUN mkdir -p /var/log/firewall /etc/fw_inspect/yara \
+    && touch /var/log/firewall/alerts.log
 
 # Expose HTTP port 80
 EXPOSE 80
