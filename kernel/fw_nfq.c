@@ -34,6 +34,17 @@ static pthread_mutex_t agent_lock = PTHREAD_MUTEX_INITIALIZER;
 extern int init_conn_pool(void);
 extern void cleanup_conn_pool(void);
 
+extern int g_block_local_ips;
+
+static int is_local_ip(uint32_t ip) {
+    uint8_t *p = (uint8_t *)&ip;
+    if (p[0] == 127) return 1;
+    if (p[0] == 10) return 1;
+    if (p[0] == 172 && (p[1] >= 16 && p[1] <= 31)) return 1;
+    if (p[0] == 192 && p[1] == 168) return 1;
+    return 0;
+}
+
 // Inspection functions
 extern int inspect_ip_blocklist(uint32_t src_ip);
 extern void update_ip_blocklist(struct blocklist_payload *payload);
@@ -136,17 +147,26 @@ void *agent_listener_thread(void *arg) {
 
         struct blocklist_payload bl_payload;
         while (1) {
-            int bytes_read = read(client_fd, &bl_payload, sizeof(struct blocklist_payload));
-            if (bytes_read <= 0) {
-                break; 
+            int total_read = 0;
+            char *ptr = (char *)&bl_payload;
+            while (total_read < sizeof(struct blocklist_payload)) {
+                int r = read(client_fd, ptr + total_read, sizeof(struct blocklist_payload) - total_read);
+                if (r <= 0) break;
+                total_read += r;
             }
-            if (bytes_read == sizeof(struct blocklist_payload)) {
+            
+            if (total_read == 0) {
+                break; // EOF
+            }
+            
+            if (total_read == sizeof(struct blocklist_payload)) {
                 update_ip_blocklist(&bl_payload);
                 printf("[fw_nfq] Loaded %d IP blocklist entries from agent\n", bl_payload.count);
-                
                 for (uint32_t i = 0; i < bl_payload.count; i++) {
                     ebpf_xdp_block_ip(bl_payload.entries[i].ip);
                 }
+            } else {
+                break; // Short read or error
             }
         }
 
@@ -183,7 +203,7 @@ static int fw_nfq_callback(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 
         struct iphdr *iph = (struct iphdr *)payload;
 
-        // 1. IP Reputation Check (Score >= 80 blocks immediately)
+        // 1. IP Reputation Check (Log threat but do not block here)
         int rep_score = get_ip_reputation(iph->saddr);
         if (rep_score >= 80) {
             struct fw_event event = {
@@ -194,12 +214,11 @@ static int fw_nfq_callback(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
                 .severity = SEVERITY_CRITICAL,
             };
             snprintf(event.payload_preview, sizeof(event.payload_preview), "IP Reputation: %d", rep_score);
-            snprintf(event.details, sizeof(event.details), "Connection dropped: source IP reputation is malicious (score >= 80)");
+            snprintf(event.details, sizeof(event.details), "High reputation score detected (score >= 80)");
             send_fw_event(&event);
-            verdict = NF_DROP; // Restored production WAF drop action
         }
         // 2. IP Blocklist check
-        else if (inspect_ip_blocklist(iph->saddr)) {
+        if (inspect_ip_blocklist(iph->saddr)) {
             struct fw_event event = {
                 .timestamp = ktime_get_real_seconds(),
                 .src_ip = iph->saddr,
@@ -225,6 +244,14 @@ static int fw_nfq_callback(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
                 if (inspect_http_payload(&skb, iph, tcph)) {
                     verdict = NF_DROP;
                 }
+            }
+        }
+
+        // Apply local IP bypass logic: allow local IP threats (e.g. LAN) unless g_block_local_ips is enabled
+        if (verdict == NF_DROP && is_local_ip(iph->saddr)) {
+            if (!g_block_local_ips) {
+                printf("[fw_nfq] Local IP threat bypassed: ALLOWED.\n");
+                verdict = NF_ACCEPT;
             }
         }
     }

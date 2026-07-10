@@ -141,6 +141,12 @@ static void load_and_push_blocklist(void) {
             continue;
         }
 
+        if (strncmp(ip_str, "block_local_ips=", 16) == 0) {
+            payload.block_local_ips = atoi(ip_str + 16);
+            printf("[agent] Found config directive: block_local_ips = %d\n", payload.block_local_ips);
+            continue;
+        }
+
         char *slash = strchr(ip_str, '/');
         int mask = 32;
         if (slash) {
@@ -460,12 +466,97 @@ int main(int argc, char **argv) {
                                 inet_ntop(AF_INET, &addr, ip_str, sizeof(ip_str));
                                 printf("[agent] Blocking IP: %s\n", ip_str);
 
-                                struct blocklist_payload bl;
-                                memset(&bl, 0, sizeof(bl));
-                                bl.count = 1;
-                                bl.entries[0].ip = ip;
-                                bl.entries[0].mask = 32;
-                                push_blocklist_payload(&bl);
+                                FILE *f = fopen(BLOCKLIST_PATH, "r");
+                                int exists = 0;
+                                if (f) {
+                                    char line[128];
+                                    while (fgets(line, sizeof(line), f)) {
+                                        if (strstr(line, ip_str)) {
+                                            exists = 1;
+                                            break;
+                                        }
+                                    }
+                                    fclose(f);
+                                }
+                                
+                                if (!exists) {
+                                    f = fopen(BLOCKLIST_PATH, "a");
+                                    if (f) {
+                                        fprintf(f, "%s/32\n", ip_str);
+                                        fclose(f);
+                                    }
+                                }
+                                load_and_push_blocklist();
+                            }
+                        }
+                        else if (soc_hdr.msg_type == MSG_TYPE_UNBLOCK_IP) {
+                            // Unblock single IP
+                            if (dec_len >= 4) {
+                                uint32_t ip = *(uint32_t *)decrypted;
+                                char ip_str[32];
+                                struct in_addr addr = { .s_addr = ip };
+                                inet_ntop(AF_INET, &addr, ip_str, sizeof(ip_str));
+                                printf("[agent] Unblocking IP: %s\n", ip_str);
+
+                                FILE *f = fopen(BLOCKLIST_PATH, "r");
+                                char lines[MAX_BLOCKLIST_IPS][128];
+                                int line_count = 0;
+                                if (f) {
+                                    char line[128];
+                                    while (fgets(line, sizeof(line), f) && line_count < MAX_BLOCKLIST_IPS) {
+                                        if (line[0] == '\r' || line[0] == '\n' || line[0] == '#') continue;
+                                        if (strstr(line, ip_str)) continue;
+                                        snprintf(lines[line_count], sizeof(lines[line_count]), "%s", line);
+                                        line_count++;
+                                    }
+                                    fclose(f);
+                                }
+
+                                f = fopen(BLOCKLIST_PATH, "w");
+                                if (f) {
+                                    fprintf(f, "# Firewall IP Blocklist\n");
+                                    for (int i = 0; i < line_count; i++) {
+                                        fprintf(f, "%s", lines[i]);
+                                    }
+                                    fclose(f);
+                                }
+                                load_and_push_blocklist();
+                            }
+                        }
+                        else if (soc_hdr.msg_type == MSG_TYPE_CONFIG_UPDATE) {
+                            if (dec_len >= 4) {
+                                uint32_t config_val = *(uint32_t *)decrypted;
+                                printf("[agent] Received Config Update: block_local_ips = %u\n", config_val);
+                                
+                                // Read the existing blocklist
+                                FILE *f = fopen(BLOCKLIST_PATH, "r");
+                                char lines[MAX_BLOCKLIST_IPS][128];
+                                int line_count = 0;
+                                if (f) {
+                                    char line[128];
+                                    while (fgets(line, sizeof(line), f) && line_count < MAX_BLOCKLIST_IPS) {
+                                        if (line[0] == '\r' || line[0] == '\n' || line[0] == '#') continue;
+                                        if (strncmp(line, "block_local_ips=", 16) == 0) continue;
+                                        snprintf(lines[line_count], sizeof(lines[line_count]), "%s", line);
+                                        line_count++;
+                                    }
+                                    fclose(f);
+                                }
+                                
+                                // Rewrite blocklist
+                                f = fopen(BLOCKLIST_PATH, "w");
+                                if (f) {
+                                    fprintf(f, "# Firewall IP Blocklist\n");
+                                    fprintf(f, "block_local_ips=%u\n", config_val);
+                                    for (int i = 0; i < line_count; i++) {
+                                        fprintf(f, "%s", lines[i]);
+                                    }
+                                    fclose(f);
+                                    printf("[agent] Persisted and updated blocklist.txt locally.\n");
+                                }
+                                
+                                // Push to firewall
+                                load_and_push_blocklist();
                             }
                         }
                         else if (soc_hdr.msg_type == MSG_TYPE_YARA_UPDATE) {

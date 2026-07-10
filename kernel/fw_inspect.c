@@ -82,12 +82,24 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
     }
 }
 
+extern int g_block_local_ips;
+
+static int is_local_ip(uint32_t ip) {
+    uint8_t *p = (uint8_t *)&ip;
+    if (p[0] == 127) return 1;
+    if (p[0] == 10) return 1;
+    if (p[0] == 172 && (p[1] >= 16 && p[1] <= 31)) return 1;
+    if (p[0] == 192 && p[1] == 168) return 1;
+    return 0;
+}
+
 // Netfilter Hook Function
 static unsigned int fw_hook_fn(void *priv,
                              struct sk_buff *skb,
                              const struct nf_hook_state *state) {
     struct iphdr *iph;
     struct tcphdr *tcph;
+    int verdict = NF_ACCEPT;
 
     if (!skb) return NF_ACCEPT;
 
@@ -107,31 +119,35 @@ static unsigned int fw_hook_fn(void *priv,
         snprintf(event.payload_preview, sizeof(event.payload_preview), "IP Blocklisted");
         snprintf(event.details, sizeof(event.details), "Inbound connection blocked from blocklisted IP address");
         send_fw_event(&event);
-        return NF_DROP;
+        verdict = NF_DROP;
     }
 
     // Inspect TCP traffic
-    if (iph->protocol == IPPROTO_TCP) {
+    if (verdict != NF_DROP && iph->protocol == IPPROTO_TCP) {
         // Ensure transport header is pulled
         tcph = tcp_hdr(skb);
-        if (!tcph) return NF_ACCEPT;
-
-        // 2. TCP Stats Monitoring (SYN flood, Slowloris)
-        if (monitor_tcp_stats(iph, tcph)) {
-            // Monitor flagged a drop action (e.g. active SYN flood or Slowloris attack)
-            return NF_DROP;
-        }
-
-        // 3. HTTP Payload Inspection
-        // Port 80 (Apache HTTP)
-        if (ntohs(tcph->dest) == 80) {
-            if (inspect_http_payload(skb, iph, tcph)) {
-                return NF_DROP;
+        if (tcph) {
+            // 2. TCP Stats Monitoring (SYN flood, Slowloris)
+            if (monitor_tcp_stats(iph, tcph)) {
+                verdict = NF_DROP;
+            }
+            // 3. HTTP Payload Inspection
+            else if (ntohs(tcph->dest) == 80) {
+                if (inspect_http_payload(skb, iph, tcph)) {
+                    verdict = NF_DROP;
+                }
             }
         }
     }
 
-    return NF_ACCEPT;
+    // Apply local IP bypass logic
+    if (verdict == NF_DROP && is_local_ip(iph->saddr)) {
+        if (!g_block_local_ips) {
+            verdict = NF_ACCEPT;
+        }
+    }
+
+    return verdict;
 }
 
 // Hook registration struct

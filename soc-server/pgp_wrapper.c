@@ -44,7 +44,7 @@ int pgp_encrypt(const void *plaintext, size_t plaintext_len, char **ciphertext, 
             "--yes",
             "--encrypt",
             "--sign",
-            "--recipient", "soc@soc.local",
+            "--recipient", "agent@soc.local",
             "--trust-model", "always",
             "--armor",
             NULL

@@ -11,6 +11,12 @@ import java.io.BufferedReader;
 import java.net.Socket;
 import java.util.*;
 import org.springframework.security.crypto.bcrypt.BCrypt;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.context.event.EventListener;
+import com.nullsploit.event.NewEventDetectedEvent;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.io.PrintWriter;
 
 @RestController
 @CrossOrigin(origins = "*")
@@ -20,39 +26,109 @@ public class DashboardController {
     @Autowired
     private JdbcTemplate jdbc;
 
+    @Autowired
+    private com.nullsploit.service.NotificationService notificationService;
+
+    private static final List<SseEmitter> emitters = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    @EventListener
+    public void handleNewEvent(NewEventDetectedEvent springEvent) {
+        Map<String, Object> eventData = springEvent.getEventData();
+        List<SseEmitter> deadEmitters = new ArrayList<>();
+        for (SseEmitter emitter : emitters) {
+            try {
+                emitter.send(SseEmitter.event().data(eventData));
+            } catch (Exception e) {
+                deadEmitters.add(emitter);
+            }
+        }
+        emitters.removeAll(deadEmitters);
+    }
+
+    @GetMapping(value = "/events/live", produces = org.springframework.http.MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter liveEvents(@RequestParam(required = false) String token) {
+        if (token == null || !com.nullsploit.config.WebConfig.activeTokens.contains(token)) {
+            throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.UNAUTHORIZED, "Unauthorized");
+        }
+        SseEmitter emitter = new SseEmitter(3600000L); // 1 hour
+        emitters.add(emitter);
+        emitter.onCompletion(() -> emitters.remove(emitter));
+        emitter.onTimeout(() -> emitters.remove(emitter));
+        emitter.onError((e) -> emitters.remove(emitter));
+        return emitter;
+    }
+
     // 1. Dashboard Stats
     @GetMapping("/dashboard/stats")
-    public Map<String, Object> getStats() {
+    public Map<String, Object> getStats(
+            @RequestParam(required = false) String timeframe,
+            @RequestParam(required = false) String agent) {
+        
+        StringBuilder whereClause = new StringBuilder(" WHERE 1=1");
+        List<Object> params = new ArrayList<>();
+        
+        if (agent != null && !agent.trim().isEmpty() && !agent.equals("all")) {
+            whereClause.append(" AND agent_uuid = ?::uuid");
+            params.add(agent);
+        }
+        
+        if (timeframe != null) {
+            if (timeframe.equals("1h")) {
+                whereClause.append(" AND timestamp >= CURRENT_TIMESTAMP - INTERVAL '1 hour'");
+            } else if (timeframe.equals("24h")) {
+                whereClause.append(" AND timestamp >= CURRENT_TIMESTAMP - INTERVAL '24 hours'");
+            } else if (timeframe.equals("7d")) {
+                whereClause.append(" AND timestamp >= CURRENT_TIMESTAMP - INTERVAL '7 days'");
+            }
+        }
+        
         Map<String, Object> res = new HashMap<>();
         
-        Integer totalEvents = jdbc.queryForObject("SELECT COUNT(*) FROM events", Integer.class);
+        String countSql = "SELECT COUNT(*) FROM events" + whereClause.toString();
+        Integer totalEvents = jdbc.queryForObject(countSql, Integer.class, params.toArray());
         res.put("total_events", totalEvents != null ? totalEvents : 0);
 
-        List<Map<String, Object>> byThreat = jdbc.queryForList(
-            "SELECT threat_type, COUNT(*) as count FROM events GROUP BY threat_type"
-        );
+        String threatSql = "SELECT threat_type, COUNT(*) as count FROM events" + whereClause.toString() + " GROUP BY threat_type";
+        List<Map<String, Object>> byThreat = jdbc.queryForList(threatSql, params.toArray());
         Map<String, Object> threatMap = new HashMap<>();
         for (Map<String, Object> row : byThreat) {
             threatMap.put(row.get("threat_type").toString(), row.get("count"));
         }
         res.put("by_threat", threatMap);
 
-        List<Map<String, Object>> bySeverity = jdbc.queryForList(
-            "SELECT severity, COUNT(*) as count FROM events GROUP BY severity"
-        );
+        String severitySql = "SELECT severity, COUNT(*) as count FROM events" + whereClause.toString() + " GROUP BY severity";
+        List<Map<String, Object>> bySeverity = jdbc.queryForList(severitySql, params.toArray());
         Map<String, Object> severityMap = new HashMap<>();
         for (Map<String, Object> row : bySeverity) {
             severityMap.put(row.get("severity").toString(), row.get("count"));
         }
         res.put("by_severity", severityMap);
 
-        // Timeline mockup matching 24-hr layout
+        String timelineSql = "";
         List<Map<String, Object>> timeline = new ArrayList<>();
-        for (int i = 0; i < 10; i++) {
-            Map<String, Object> pt = new HashMap<>();
-            pt.put("time", (i * 2) + ":00");
-            pt.put("count", 5 + (i * 3) % 7);
-            timeline.add(pt);
+        if (timeframe != null && timeframe.equals("1h")) {
+            timelineSql = "SELECT to_char(timestamp, 'HH24:MI') as time, COUNT(*) as count " +
+                          "FROM events" + whereClause.toString() + 
+                          " GROUP BY time ORDER BY MIN(timestamp) ASC LIMIT 12";
+        } else if (timeframe != null && timeframe.equals("7d")) {
+            timelineSql = "SELECT to_char(timestamp, 'YYYY-MM-DD') as time, COUNT(*) as count " +
+                          "FROM events" + whereClause.toString() + 
+                          " GROUP BY time ORDER BY time ASC LIMIT 7";
+        } else {
+            timelineSql = "SELECT to_char(timestamp, 'HH24') || ':00' as time, COUNT(*) as count " +
+                          "FROM events" + whereClause.toString() + 
+                          " GROUP BY time ORDER BY time ASC LIMIT 24";
+        }
+        
+        try {
+            timeline = jdbc.queryForList(timelineSql, params.toArray());
+        } catch (Exception e) {
+            for (int i = 0; i < 10; i++) {
+                Map<String, Object> pt = new HashMap<>();
+                pt.put("time", (i * 2) + ":00");
+                pt.put("count", 0);
+                timeline.add(pt);
+            }
         }
         res.put("timeline", timeline);
 
@@ -63,21 +139,53 @@ public class DashboardController {
     @GetMapping("/events")
     public List<Map<String, Object>> getEvents(
             @RequestParam(defaultValue = "50") int limit,
-            @RequestParam(defaultValue = "0") int offset) {
-        return jdbc.queryForList(
-            "SELECT id, agent_uuid::text as agent_uuid, EXTRACT(epoch FROM timestamp)::bigint as timestamp, src_ip::text as src_ip, dest_ip::text as dest_ip, src_port, dest_port, threat_type, severity, payload_preview, details " +
-            "FROM events ORDER BY timestamp DESC LIMIT ? OFFSET ?", limit, offset
+            @RequestParam(defaultValue = "0") int offset,
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) Integer severity,
+            @RequestParam(required = false) Integer threat_type) {
+        
+        StringBuilder sql = new StringBuilder(
+            "SELECT id, agent_uuid::text as agent_uuid, EXTRACT(epoch FROM timestamp)::bigint as timestamp, " +
+            "host(src_ip) as src_ip, host(dest_ip) as dest_ip, src_port, dest_port, threat_type, severity, " +
+            "payload_preview, details FROM events WHERE 1=1"
         );
+        List<Object> params = new ArrayList<>();
+        
+        if (severity != null) {
+            sql.append(" AND severity = ?");
+            params.add(severity);
+        }
+        
+        if (threat_type != null) {
+            sql.append(" AND threat_type = ?");
+            params.add(threat_type);
+        }
+        
+        if (search != null && !search.trim().isEmpty()) {
+            String term = search.trim();
+            sql.append(" AND (host(src_ip) = ? OR host(dest_ip) = ? OR payload_preview LIKE ? OR details LIKE ?)");
+            params.add(term);
+            params.add(term);
+            params.add("%" + term + "%");
+            params.add("%" + term + "%");
+        }
+        
+        sql.append(" ORDER BY timestamp DESC LIMIT ? OFFSET ?");
+        params.add(limit);
+        params.add(offset);
+        
+        return jdbc.queryForList(sql.toString(), params.toArray());
     }
 
     // 3. Agents List (Dynamically calculates online/offline status based on 30-sec heartbeat window)
     @GetMapping("/agents")
     public List<Map<String, Object>> getAgents() {
-        return jdbc.queryForList(
+        List<Map<String, Object>> list = jdbc.queryForList(
             "SELECT uuid::text as uuid, hostname, ip, " +
             "CASE WHEN last_seen >= CURRENT_TIMESTAMP - INTERVAL '30 seconds' THEN 'active' ELSE 'offline' END as status, " +
             "last_seen FROM agents"
         );
+        return sanitizeIps(list, "ip");
     }
 
     // 3b. Dashboard Authentication
@@ -88,8 +196,10 @@ public class DashboardController {
         Map<String, Object> res = new HashMap<>();
 
         if (verifyUser(username, password)) {
+            String token = UUID.randomUUID().toString();
+            com.nullsploit.config.WebConfig.activeTokens.add(token);
             res.put("status", "success");
-            res.put("token", UUID.randomUUID().toString());
+            res.put("token", token);
         } else {
             res.put("status", "failed");
         }
@@ -149,11 +259,11 @@ public class DashboardController {
                 
                 // Construct control payload matching C local_cmd struct
                 byte[] uuidBytes = new byte[33];
-                byte[] rawUuid = uuid.getBytes();
+                byte[] rawUuid = uuid.replace("-", "").getBytes();
                 System.arraycopy(rawUuid, 0, uuidBytes, 0, Math.min(rawUuid.length, 32));
                 
                 out.write(uuidBytes); // 33 bytes agent_uuid_hex
-                out.write(1);         // 1 byte MSG_TYPE_BLOCK_IP
+                out.write(3);         // 1 byte MSG_TYPE_BLOCK_IP (3)
                 
                 byte[] ipBytes = new byte[4];
                 ipBytes[0] = (byte) (ipVal & 0xFF);
@@ -176,9 +286,10 @@ public class DashboardController {
     // 6. Get Blocklist
     @GetMapping("/blocklist")
     public List<Map<String, Object>> getBlocklist() {
-        return jdbc.queryForList(
-            "SELECT id, ip_cidr::text as ip_cidr, list_type, reason, created_at FROM blocklist"
+        List<Map<String, Object>> list = jdbc.queryForList(
+            "SELECT id, host(ip_cidr) as ip_cidr, list_type, reason, created_at FROM blocklist"
         );
+        return sanitizeIps(list, "ip_cidr");
     }
 
     // 7. Add to Blocklist
@@ -187,18 +298,20 @@ public class DashboardController {
         String ipCidr = body.get("ip_cidr");
         String reason = body.get("reason");
         jdbc.update(
-            "INSERT INTO blocklist (ip_cidr, list_type, reason) VALUES (?, 'block', ?)",
+            "INSERT INTO blocklist (ip_cidr, list_type, reason) VALUES (?::cidr, 'block', ?)",
             ipCidr, reason
         );
+        pushBlocklistUpdateToAgents(ipCidr, 3); // 3 = MSG_TYPE_BLOCK_IP
         Map<String, String> res = new HashMap<>();
         res.put("status", "added");
         return res;
     }
 
     // 8. Delete from Blocklist
-    @DeleteMapping("/blocklist/{ipCidr}")
-    public Map<String, String> removeBlocklist(@PathVariable String ipCidr) {
-        jdbc.update("DELETE FROM blocklist WHERE ip_cidr = ?", ipCidr);
+    @DeleteMapping("/blocklist")
+    public Map<String, String> removeBlocklist(@RequestParam String ipCidr) {
+        jdbc.update("DELETE FROM blocklist WHERE ip_cidr = ?::cidr", ipCidr);
+        pushBlocklistUpdateToAgents(ipCidr, 4); // 4 = MSG_TYPE_UNBLOCK_IP
         Map<String, String> res = new HashMap<>();
         res.put("status", "removed");
         return res;
@@ -206,10 +319,38 @@ public class DashboardController {
 
     // 9. Get IP Reputation
     @GetMapping("/reputation")
-    public List<Map<String, Object>> getReputation() {
-        return jdbc.queryForList(
-            "SELECT ip::text as ip, score, local_score, external_score, attack_types, updated_at FROM ip_reputation"
-        );
+    public List<Map<String, Object>> getReputation(@RequestParam(required = false) String type) {
+        List<Map<String, Object>> list;
+        if ("local".equalsIgnoreCase(type)) {
+            list = jdbc.queryForList(
+                "SELECT host(ip) as ip, score, local_score, external_score, array_to_string(attack_types, ',') as attack_types, updated_at FROM ip_reputation WHERE local_score > 0 ORDER BY local_score DESC"
+            );
+        } else if ("external".equalsIgnoreCase(type)) {
+            list = jdbc.queryForList(
+                "SELECT host(ip) as ip, score, local_score, external_score, array_to_string(attack_types, ',') as attack_types, updated_at FROM ip_reputation WHERE external_score > 0 ORDER BY external_score DESC"
+            );
+        } else {
+            list = jdbc.queryForList(
+                "SELECT host(ip) as ip, score, local_score, external_score, array_to_string(attack_types, ',') as attack_types, updated_at FROM ip_reputation ORDER BY score DESC"
+            );
+        }
+        return sanitizeIps(list, "ip");
+    }
+
+    // 9b. Clear IP Reputation
+    @DeleteMapping("/reputation")
+    public Map<String, String> clearReputation(@RequestParam(required = false) String ip) {
+        Map<String, String> res = new HashMap<>();
+        if (ip != null && !ip.trim().isEmpty()) {
+            jdbc.update("DELETE FROM ip_reputation WHERE ip = ?::inet", ip.trim());
+            jdbc.update("DELETE FROM events WHERE src_ip = ?::inet", ip.trim());
+            res.put("status", "cleared_ip");
+        } else {
+            jdbc.update("DELETE FROM ip_reputation");
+            jdbc.update("DELETE FROM events");
+            res.put("status", "cleared_all");
+        }
+        return res;
     }
 
     // 10. Get YARA rules
@@ -262,8 +403,60 @@ public class DashboardController {
             "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
             key, value, category
         );
+
+        if ("block_local_ips".equals(key)) {
+            int val = 0;
+            if (value.contains("true") || value.contains("1")) {
+                val = 1;
+            }
+            
+            // Get all online agents (seen in the last 30 seconds)
+            List<String> uuids = jdbc.queryForList(
+                "SELECT uuid::text FROM agents WHERE last_seen >= CURRENT_TIMESTAMP - INTERVAL '30 seconds'",
+                String.class
+            );
+            
+            for (String uuid : uuids) {
+                try (Socket socket = new Socket("127.0.0.1", 8444);
+                     OutputStream out = socket.getOutputStream()) {
+                    
+                    byte[] uuidBytes = new byte[33];
+                    byte[] rawUuid = uuid.replace("-", "").getBytes();
+                    System.arraycopy(rawUuid, 0, uuidBytes, 0, Math.min(rawUuid.length, 32));
+                    
+                    out.write(uuidBytes); // 33 bytes agent_uuid_hex
+                    out.write(5);         // 1 byte MSG_TYPE_CONFIG_UPDATE (5)
+                    
+                    byte[] valBytes = new byte[4];
+                    valBytes[0] = (byte) (val & 0xFF);
+                    valBytes[1] = (byte) ((val >> 8) & 0xFF);
+                    valBytes[2] = (byte) ((val >> 16) & 0xFF);
+                    valBytes[3] = (byte) ((val >> 24) & 0xFF);
+                    out.write(valBytes);   // 4 bytes payload
+                    
+                    out.flush();
+                } catch (Exception e) {
+                    System.err.println("Failed to push config update to agent " + uuid + ": " + e.getMessage());
+                }
+            }
+        }
+
         Map<String, String> res = new HashMap<>();
         res.put("status", "saved");
+        return res;
+    }
+
+    // 14b. Test Email
+    @PostMapping("/config/test-email")
+    public Map<String, String> sendTestEmail() {
+        Map<String, String> res = new HashMap<>();
+        try {
+            notificationService.sendTestEmail();
+            res.put("status", "success");
+        } catch (Exception e) {
+            res.put("status", "failed");
+            res.put("error", e.getMessage());
+        }
         return res;
     }
 
@@ -273,5 +466,117 @@ public class DashboardController {
         return jdbc.queryForList(
             "SELECT id, feed_name, indicator_type, indicator_value, threat_type, confidence, source_url, fetched_at FROM threat_intel"
         );
+    }
+
+    // 16. Get AI Dataset list
+    @GetMapping("/dataset")
+    public List<Map<String, Object>> getDatasetList() {
+        return jdbc.queryForList(
+            "SELECT d.id, d.event_id, host(e.src_ip) as src_ip, host(e.dest_ip) as dest_ip, e.threat_type, e.severity, " +
+            "d.threat_detected, d.confidence, d.explanation, d.model_used, d.analyzed_at " +
+            "FROM ai_analysis_dataset d " +
+            "JOIN events e ON d.event_id = e.id " +
+            "ORDER BY d.id DESC LIMIT 50"
+        );
+    }
+
+    // 17. Download AI Dataset CSV
+    @GetMapping("/dataset/download")
+    public void downloadDataset(HttpServletResponse response) throws IOException {
+        response.setContentType("text/csv");
+        response.setHeader("Content-Disposition", "attachment; filename=ai_threat_dataset.csv");
+        
+        PrintWriter writer = response.getWriter();
+        writer.println("id,event_id,src_ip,dest_ip,threat_type,severity,payload_preview,details,threat_detected,confidence,explanation,model_used,analyzed_at");
+        
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT d.id, d.event_id, host(e.src_ip) as src_ip, host(e.dest_ip) as dest_ip, e.threat_type, e.severity, " +
+            "e.payload_preview, e.details, d.threat_detected, d.confidence, d.explanation, d.model_used, d.analyzed_at " +
+            "FROM ai_analysis_dataset d " +
+            "JOIN events e ON d.event_id = e.id " +
+            "ORDER BY d.id DESC"
+        );
+        
+        for (Map<String, Object> row : rows) {
+            writer.printf("%s,%s,%s,%s,%s,%s,\"%s\",\"%s\",%s,%s,\"%s\",\"%s\",%s\n",
+                row.get("id"),
+                row.get("event_id"),
+                row.get("src_ip"),
+                row.get("dest_ip"),
+                row.get("threat_type"),
+                row.get("severity"),
+                escapeCsv(row.get("payload_preview")),
+                escapeCsv(row.get("details")),
+                row.get("threat_detected"),
+                row.get("confidence"),
+                escapeCsv(row.get("explanation")),
+                row.get("model_used"),
+                row.get("analyzed_at")
+            );
+        }
+        writer.flush();
+    }
+
+    private String escapeCsv(Object value) {
+        if (value == null) return "";
+        return value.toString().replace("\"", "\"\"");
+    }
+
+    private void pushBlocklistUpdateToAgents(String ipCidr, int commandType) {
+        try {
+            String ip = ipCidr;
+            if (ip.contains("/")) {
+                ip = ip.substring(0, ip.indexOf("/"));
+            }
+            
+            String[] parts = ip.split("\\.");
+            long ipVal = 0;
+            for (int i = 0; i < 4; i++) {
+                ipVal |= (Long.parseLong(parts[i]) << (i * 8));
+            }
+
+            List<String> uuids = jdbc.queryForList(
+                "SELECT uuid::text FROM agents WHERE last_seen >= CURRENT_TIMESTAMP - INTERVAL '30 seconds'",
+                String.class
+            );
+
+            for (String uuid : uuids) {
+                try (Socket socket = new Socket("127.0.0.1", 8444);
+                     OutputStream out = socket.getOutputStream()) {
+                    
+                    byte[] uuidBytes = new byte[33];
+                    byte[] rawUuid = uuid.replace("-", "").getBytes();
+                    System.arraycopy(rawUuid, 0, uuidBytes, 0, Math.min(rawUuid.length, 32));
+                    
+                    out.write(uuidBytes); // 33 bytes agent_uuid_hex
+                    out.write(commandType); // 1 byte MSG_TYPE_BLOCK_IP (3) or MSG_TYPE_UNBLOCK_IP (4)
+                    
+                    byte[] ipBytes = new byte[4];
+                    ipBytes[0] = (byte) (ipVal & 0xFF);
+                    ipBytes[1] = (byte) ((ipVal >> 8) & 0xFF);
+                    ipBytes[2] = (byte) ((ipVal >> 16) & 0xFF);
+                    ipBytes[3] = (byte) ((ipVal >> 24) & 0xFF);
+                    out.write(ipBytes);   // 4 bytes IP address
+                    
+                    out.flush();
+                } catch (Exception e) {
+                    System.err.println("Failed to push blocklist update to agent " + uuid + ": " + e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to parse IP for blocklist update: " + ipCidr);
+        }
+    }
+
+    private List<Map<String, Object>> sanitizeIps(List<Map<String, Object>> list, String... keys) {
+        for (Map<String, Object> map : list) {
+            for (String key : keys) {
+                Object val = map.get(key);
+                if (val != null) {
+                    map.put(key, val.toString());
+                }
+            }
+        }
+        return list;
     }
 }

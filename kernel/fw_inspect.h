@@ -53,6 +53,7 @@ struct blocklist_entry {
 
 struct blocklist_payload {
     uint32_t count;
+    uint32_t block_local_ips;
     struct blocklist_entry entries[MAX_BLOCKLIST_IPS];
 };
 

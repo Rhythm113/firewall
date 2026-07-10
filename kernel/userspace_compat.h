@@ -13,6 +13,13 @@
 #include <netinet/tcp.h>
 #include <errno.h>
 
+#ifndef NF_ACCEPT
+#define NF_ACCEPT 1
+#endif
+#ifndef NF_DROP
+#define NF_DROP 0
+#endif
+
 // Mock kernel printk
 #define printk(fmt, ...) printf(fmt, ##__VA_ARGS__)
 #define KERN_INFO "INFO: "

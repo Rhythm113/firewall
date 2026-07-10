@@ -58,6 +58,34 @@ static const char *k_stristr(const char *haystack, int haystack_len, const char 
     return NULL;
 }
 
+static int is_hex_char(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+static int hex_val(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    return 0;
+}
+
+static int url_decode(const char *src, int src_len, char *dst, int dst_len) {
+    int i = 0, j = 0;
+    while (i < src_len && j < dst_len - 1) {
+        if (src[i] == '%' && i + 2 < src_len && is_hex_char(src[i+1]) && is_hex_char(src[i+2])) {
+            dst[j++] = (char)((hex_val(src[i+1]) << 4) | hex_val(src[i+2]));
+            i += 3;
+        } else if (src[i] == '+') {
+            dst[j++] = ' ';
+            i++;
+        } else {
+            dst[j++] = src[i++];
+        }
+    }
+    dst[j] = '\0';
+    return j;
+}
+
 // Main HTTP payload inspector
 int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct tcphdr *tcph) {
     unsigned char *payload;
@@ -96,8 +124,19 @@ int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct tcphdr *
     tcph = tcp_hdr(skb);
     payload = skb->data + payload_offset;
 
-    // We can limit scan depth for inline to prevent performance degradation
-    int scan_len = payload_len > 2048 ? 2048 : payload_len;
+    // Register HTTP header data sent and check for completion for Slowloris metrics
+    extern void register_http_header_sent(uint32_t ip, uint16_t port);
+    extern void register_http_complete(uint32_t ip, uint16_t port);
+    register_http_header_sent(iph->saddr, tcph->source);
+    if (k_strstr((const char *)payload, payload_len > 2048 ? 2048 : payload_len, "\r\n\r\n", 4)) {
+        register_http_complete(iph->saddr, tcph->source);
+    }
+
+    // URL decode the payload for pattern matching to support encoded URLs
+    static char decode_buf[4096];
+    int raw_scan_len = payload_len > 2048 ? 2048 : payload_len;
+    int scan_len = url_decode((const char *)payload, raw_scan_len, decode_buf, sizeof(decode_buf));
+    payload = (unsigned char *)decode_buf;
 
     char pattern[128];
     char details[256];

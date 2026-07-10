@@ -19,6 +19,8 @@ struct blocklist_node {
     struct rcu_head rcu;
 };
 
+int g_block_local_ips = 0;
+
 // Declaring the hash table
 static DEFINE_HASHTABLE(blocklist_hash, HASH_BITS);
 static DEFINE_SPINLOCK(blocklist_lock);
@@ -65,11 +67,17 @@ void update_ip_blocklist(struct blocklist_payload *payload) {
     int i;
     
     spin_lock(&blocklist_lock);
+    g_block_local_ips = payload->block_local_ips;
 
-    // 1. Clear old blocklist
-    hash_for_each_safe(blocklist_hash, bucket, tmp, curr, node) {
-        hash_del_rcu(&curr->node);
-        kfree_rcu(curr, rcu);
+    // 1. Clear old blocklist and free nodes
+    for (bucket = 0; bucket < (1 << HASH_BITS); bucket++) {
+        struct hlist_node *n = blocklist_hash[bucket];
+        while (n) {
+            struct blocklist_node *node_to_free = container_of(n, struct blocklist_node, node);
+            n = n->next;
+            free(node_to_free);
+        }
+        blocklist_hash[bucket] = NULL;
     }
 
     // 2. Load new blocklist

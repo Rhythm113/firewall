@@ -259,7 +259,7 @@
                 </div>
                 <div class="form-group" style="margin-bottom: 24px;">
                     <label>Password</label>
-                    <input type="password" id="login-password" placeholder="••••••••" required>
+                    <input type="password" id="login-password" placeholder="********" required>
                 </div>
                 <div id="login-error" style="color: #ef4444; font-size: 0.8rem; margin-bottom: 16px; display: none; text-align: center;">
                     Invalid credentials. Please retry.
@@ -286,7 +286,10 @@
                 <button onclick="switchTab('agents')">WAF Nodes</button>
                 <button onclick="switchTab('yara')">YARA Catalog</button>
                 <button onclick="switchTab('reputation')">IP Reputation</button>
+                <button onclick="switchTab('blacklist')">IP Blacklist</button>
                 <button onclick="switchTab('configs')">Global Configs</button>
+                <button onclick="switchTab('settings')">Firewall Settings</button>
+                <button onclick="switchTab('dataset')">AI Dataset</button>
                 <button onclick="logout()" style="color: #ef4444; margin-top: 24px;">Logout</button>
             </nav>
         </div>
@@ -312,6 +315,25 @@
             
             <!-- OVERVIEW TAB -->
             <div id="tab-overview" class="tab-content">
+                <!-- Dashboard Filters -->
+                <div class="card" style="padding: 16px; margin-bottom: 24px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <label style="font-size: 0.75rem; color: #9ca3af; text-transform: uppercase;">Timeframe:</label>
+                        <select id="filter-timeframe" onchange="loadDashboardStats()" style="background: #080d1a; border: 1px solid var(--border); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.8rem; outline: none; cursor: pointer;">
+                            <option value="all">All Time</option>
+                            <option value="1h">Last 1 Hour</option>
+                            <option value="24h" selected>Last 24 Hours</option>
+                            <option value="7d">Last 7 Days</option>
+                        </select>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <label style="font-size: 0.75rem; color: #9ca3af; text-transform: uppercase;">Cluster Node:</label>
+                        <select id="filter-node" onchange="loadDashboardStats()" style="background: #080d1a; border: 1px solid var(--border); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.8rem; outline: none; cursor: pointer;">
+                            <option value="all">All Nodes</option>
+                        </select>
+                    </div>
+                </div>
+
                 <div class="grid-3" style="margin-bottom: 24px;">
                     <div class="card">
                         <div style="font-size: 0.75rem; color: #9ca3af; text-transform: uppercase;">Total Events</div>
@@ -363,8 +385,50 @@
 
             <!-- EVENTS TAB -->
             <div id="tab-events" class="tab-content" style="display: none;">
+                <!-- Log Filters -->
+                <div class="card" style="padding: 16px; margin-bottom: 24px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 200px;">
+                        <label style="font-size: 0.75rem; color: #9ca3af; text-transform: uppercase;">Search:</label>
+                        <input type="text" id="log-search" oninput="debounceLogFilter()" placeholder="Search IP or payload..." style="flex: 1; background: #080d1a; border: 1px solid var(--border); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.8rem; outline: none;">
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <label style="font-size: 0.75rem; color: #9ca3af; text-transform: uppercase;">Severity:</label>
+                        <select id="log-severity" onchange="loadFullEvents()" style="background: #080d1a; border: 1px solid var(--border); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.8rem; outline: none; cursor: pointer;">
+                            <option value="all">All</option>
+                            <option value="2">CRITICAL</option>
+                            <option value="1">WARNING</option>
+                            <option value="0">INFO</option>
+                        </select>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <label style="font-size: 0.75rem; color: #9ca3af; text-transform: uppercase;">Vector:</label>
+                        <select id="log-vector" onchange="loadFullEvents()" style="background: #080d1a; border: 1px solid var(--border); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.8rem; outline: none; cursor: pointer;">
+                            <option value="all">All</option>
+                            <option value="1">PHP Shell</option>
+                            <option value="2">XSS</option>
+                            <option value="3">SYN Flood</option>
+                            <option value="4">Slowloris</option>
+                            <option value="5">IP Blocklist</option>
+                            <option value="6">SQLi</option>
+                            <option value="7">CMDi</option>
+                            <option value="8">LFI</option>
+                            <option value="9">RFI</option>
+                            <option value="10">YARA</option>
+                            <option value="11">Bot</option>
+                        </select>
+                    </div>
+                </div>
+
                 <div class="card">
-                    <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Threat Log Repository</h3>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                        <h3 style="margin: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af;">Threat Log Repository</h3>
+                        <!-- Pagination controls -->
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <button onclick="changePage(-1)" class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;">Prev</button>
+                            <span id="log-page-indicator" style="font-size: 0.75rem; font-family: monospace; color: #9ca3af;">Page 1</span>
+                            <button onclick="changePage(1)" class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;">Next</button>
+                        </div>
+                    </div>
                     <div style="overflow-x: auto;">
                         <table id="full-events-table">
                             <thead>
@@ -422,6 +486,10 @@
                             <div class="form-group">
                                 <label>Yara Content</label>
                                 <textarea id="yara-content" rows="12" placeholder="rule php_webshell { strings: $a = 'eval(' condition: $a }" required></textarea>
+                                <div style="margin-top: 8px; display: flex; gap: 8px;">
+                                    <input type="text" id="encoded-url-input" placeholder="Paste encoded URL here (e.g. %3Cscript%3E)..." style="flex: 1; font-size: 0.8rem; padding: 6px; background: #030712; border: 1px solid var(--border); color: #fff; border-radius: 4px;">
+                                    <button type="button" onclick="decodeUrlHelper()" class="btn-primary" style="padding: 6px 12px; font-size: 0.8rem; background: #3b82f6; width: auto;">Decode into Yara</button>
+                                </div>
                             </div>
                             <button type="submit" class="btn-primary">Deploy to Cluster</button>
                         </form>
@@ -436,22 +504,80 @@
 
             <!-- REPUTATION TAB -->
             <div id="tab-reputation" class="tab-content" style="display: none;">
-                <div class="card">
-                    <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Dynamic Malice Scoring Matrix</h3>
-                    <div style="overflow-x: auto;">
-                        <table id="reputation-table">
-                            <thead>
-                                <tr>
-                                    <th>IP Address</th>
-                                    <th>Malice Score</th>
-                                    <th>Local Score</th>
-                                    <th>External Score</th>
-                                    <th>Threat Profile</th>
-                                    <th>Last Activity</th>
-                                </tr>
-                            </thead>
-                            <tbody></tbody>
-                        </table>
+                <div style="display: flex; flex-direction: column; gap: 24px;">
+                    <div class="card">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                            <h3 style="margin: 0; font-size: 0.9rem; text-transform: uppercase; color: var(--accent);">Internal Cluster Node Reputation Matrix</h3>
+                            <button onclick="clearAllReputation()" class="btn-primary" style="background: #ef4444; width: auto; padding: 8px 16px;">Clear All IP Reputation</button>
+                        </div>
+                        <div style="overflow-x: auto;">
+                            <table id="local-reputation-table">
+                                <thead>
+                                    <tr>
+                                        <th>IP Address</th>
+                                        <th>Local Score</th>
+                                        <th>Threat Profile</th>
+                                        <th>Last Activity</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #34d399; margin-bottom: 16px;">External Threat Intelligence Lookup</h3>
+                        <div style="overflow-x: auto;">
+                            <table id="external-reputation-table">
+                                <thead>
+                                    <tr>
+                                        <th>IP Address</th>
+                                        <th>External Score</th>
+                                        <th>Threat Profile</th>
+                                        <th>Last Activity</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- BLACKLIST TAB -->
+            <div id="tab-blacklist" class="tab-content" style="display: none;">
+                <div class="grid-3">
+                    <div class="card" style="grid-column: span 2;">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Active IP Blacklist</h3>
+                        <div style="overflow-x: auto;">
+                            <table id="blacklist-table">
+                                <thead>
+                                    <tr>
+                                        <th>IP / CIDR</th>
+                                        <th>Reason</th>
+                                        <th>Created At</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Add IP to Blacklist</h3>
+                        <form id="blacklist-form">
+                            <div class="form-group">
+                                <label>IP Address / CIDR Range</label>
+                                <input type="text" id="blacklist-ip" placeholder="e.g. 192.168.1.100 or 10.0.0.0/8" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Reason</label>
+                                <input type="text" id="blacklist-reason" placeholder="e.g. Malicious scanning" required>
+                            </div>
+                            <button type="submit" class="btn-primary" style="width: 100%;">Add to Blacklist</button>
+                        </form>
                     </div>
                 </div>
             </div>
@@ -483,9 +609,119 @@
                         </form>
                     </div>
 
-                    <div class="card" style="grid-column: span 2;">
+                    <div class="card">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: var(--accent); margin-bottom: 16px;">SMTP Notification Settings</h3>
+                        <form id="smtp-settings-form">
+                            <div class="form-group">
+                                <label>SMTP Host</label>
+                                <input type="text" id="smtp-host" placeholder="smtp.mailtrap.io" required>
+                            </div>
+                            <div class="form-group">
+                                <label>SMTP Port</label>
+                                <input type="number" id="smtp-port" placeholder="2525" required>
+                            </div>
+                            <div class="form-group">
+                                <label>SMTP Username</label>
+                                <input type="text" id="smtp-username" placeholder="Username">
+                            </div>
+                            <div class="form-group">
+                                <label>SMTP Password</label>
+                                <input type="password" id="smtp-password" placeholder="Password">
+                            </div>
+                            <div class="form-group">
+                                <label>Sender Email (From)</label>
+                                <input type="email" id="smtp-from" placeholder="alerts@nullsploit.local" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Receiver Email (To)</label>
+                                <input type="email" id="smtp-to" placeholder="admin@nullsploit.local" required>
+                            </div>
+                            <div style="display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;">
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="checkbox" id="smtp-enabled" style="cursor: pointer;">
+                                    <label for="smtp-enabled" style="margin-bottom: 0; font-size: 0.75rem; color: #9ca3af; text-transform: uppercase; cursor: pointer;">Enabled</label>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="checkbox" id="smtp-auth" style="cursor: pointer;">
+                                    <label for="smtp-auth" style="margin-bottom: 0; font-size: 0.75rem; color: #9ca3af; text-transform: uppercase; cursor: pointer;">Auth</label>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="checkbox" id="smtp-tls" style="cursor: pointer;">
+                                    <label for="smtp-tls" style="margin-bottom: 0; font-size: 0.75rem; color: #9ca3af; text-transform: uppercase; cursor: pointer;">StartTLS</label>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn-primary" style="width: 100%; background: #3b82f6; margin-bottom: 12px;">Save SMTP Settings</button>
+                            <button type="button" onclick="sendTestEmail()" class="btn-primary" style="width: 100%; background: #10b981;">Send Test Email Alert</button>
+                        </form>
+                    </div>
+
+                    <div class="card">
                         <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Active Settings</h3>
-                        <div style="display: flex; flex-direction: column; gap: 12px;" id="configs-list"></div>
+                        <div style="display: flex; flex-direction: column; gap: 12px; max-height: 400px; overflow-y: auto;" id="configs-list"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SETTINGS TAB -->
+            <div id="tab-settings" class="tab-content" style="display: none;">
+                <div class="grid-2">
+                    <div class="card">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: var(--accent); margin-bottom: 16px;">Firewall Execution Controls</h3>
+                        <form id="settings-controls-form">
+                            <div class="form-group" style="display: flex; align-items: center; gap: 8px;">
+                                <input type="checkbox" id="settings-block-local" style="width: auto; cursor: pointer;">
+                                <label for="settings-block-local" style="margin-bottom: 0; cursor: pointer;">Enable Firewall Blocking on Local IPs</label>
+                            </div>
+                            <p style="font-size: 0.75rem; color: #9ca3af; margin-top: 4px; margin-bottom: 16px;">
+                                When disabled (OFF), local threats trigger a warning log but are allowed. When enabled (ON), packet drop and slow killing of attackers is enforced.
+                            </p>
+                            <button type="submit" class="btn-primary">Save Controls</button>
+                        </form>
+                    </div>
+                    <div class="card">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #34d399; margin-bottom: 16px;">OpenCode AI Integration Settings</h3>
+                        <form id="settings-ai-form">
+                            <div class="form-group">
+                                <label>OpenCode API Key</label>
+                                <input type="password" id="settings-ai-key" placeholder="Enter OpenRouter/OpenCode API key">
+                            </div>
+                            <div class="form-group">
+                                <label>DeepSeek Model Name</label>
+                                <input type="text" id="settings-ai-model" placeholder="deepseek-v4-flash-free">
+                            </div>
+                            <div class="form-group">
+                                <label>OpenRouter API Endpoint URL</label>
+                                <input type="text" id="settings-ai-url" placeholder="https://openrouter.ai/api/v1/chat/completions">
+                            </div>
+                            <button type="submit" class="btn-primary" style="background: #34d399;">Save AI Settings</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- DATASET TAB -->
+            <div id="tab-dataset" class="tab-content" style="display: none;">
+                <div class="card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                        <h3 style="margin: 0; font-size: 0.9rem; text-transform: uppercase; color: var(--accent);">AI Analysis Threat Dataset</h3>
+                        <a href="/api/v2/dataset/download" target="_blank" class="btn-primary" style="background: #3b82f6; text-decoration: none; display: inline-block; text-align: center; padding: 8px 16px; border-radius: 6px; width: auto;">Download Dataset (CSV)</a>
+                    </div>
+                    <div style="overflow-x: auto;">
+                        <table id="dataset-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Event ID</th>
+                                    <th>Source IP</th>
+                                    <th>Threat Type</th>
+                                    <th>Confidence</th>
+                                    <th>AI Decision</th>
+                                    <th>Explanation</th>
+                                    <th>Model Used</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -495,6 +731,25 @@
 
     <script>
         const API_BASE = '/api/v2';
+
+        async function authFetch(url, options = {}) {
+            const token = sessionStorage.getItem('session_token');
+            options.headers = options.headers || {};
+            if (token) {
+                options.headers['X-Session-Token'] = token;
+            }
+            try {
+                const res = await fetch(url, options);
+                if (res.status === 401) {
+                    sessionStorage.removeItem('session_token');
+                    checkSession();
+                }
+                return res;
+            } catch (err) {
+                console.error("fetch failed", err);
+                throw err;
+            }
+        }
 
         function showStatus(text, type = 'success') {
             const el = document.getElementById('status-toast');
@@ -542,25 +797,146 @@
             return `<span class="badge badge-info">INFO</span>`;
         }
 
-        async function fetchData() {
+        let logCurrentPage = 1;
+        const logPageLimit = 50;
+        let debounceTimer;
+
+        function debounceLogFilter() {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                logCurrentPage = 1;
+                loadFullEvents();
+            }, 300);
+        }
+
+        async function changePage(dir) {
+            if (dir === -1 && logCurrentPage <= 1) return;
+            logCurrentPage += dir;
+            await loadFullEvents();
+        }
+
+        async function loadDashboardStats() {
             try {
-                // 1. Stats
-                const statsRes = await fetch(`${API_BASE}/dashboard/stats`);
+                const timeframe = document.getElementById('filter-timeframe').value;
+                const agent = document.getElementById('filter-node').value;
+                
+                const statsRes = await authFetch(`${API_BASE}/dashboard/stats?timeframe=${timeframe}&agent=${agent}`);
                 if (statsRes.ok) {
                     const stats = await statsRes.json();
                     document.getElementById('stat-events').innerText = stats.total_events || 0;
                     window.timelineData = stats.timeline || [];
                     drawTimeline();
                 }
+            } catch (err) {
+                console.error("Error loading stats", err);
+            }
+        }
+
+        async function loadFullEvents() {
+            try {
+                const search = document.getElementById('log-search').value;
+                const severity = document.getElementById('log-severity').value;
+                const vector = document.getElementById('log-vector').value;
+                
+                let url = `${API_BASE}/events?limit=${logPageLimit}&offset=${(logCurrentPage - 1) * logPageLimit}`;
+                if (search && search.trim() !== '') {
+                    url += `&search=${encodeURIComponent(search.trim())}`;
+                }
+                if (severity !== 'all') {
+                    url += `&severity=${severity}`;
+                }
+                if (vector !== 'all') {
+                    url += `&threat_type=${vector}`;
+                }
+
+                const eventsRes = await authFetch(url);
+                if (eventsRes.ok) {
+                    const events = await eventsRes.json();
+                    const fullBody = document.querySelector('#full-events-table tbody');
+                    
+                    if (events.length === 0) {
+                        fullBody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #9ca3af; padding: 20px;">No matching log repository traces found.</td></tr>`;
+                    } else {
+                        fullBody.innerHTML = events.map(evt => `
+                            <tr>
+                                <td>${new Date(evt.timestamp * 1000).toLocaleString()}</td>
+                                <td style="color: #ef4444; font-weight: bold;">${evt.src_ip}</td>
+                                <td>${evt.dest_ip}</td>
+                                <td>${evt.src_port} / ${evt.dest_port}</td>
+                                <td>${getThreatName(evt.threat_type)}</td>
+                                <td>${getSeverityBadge(evt.severity)}</td>
+                                <td style="max-width: 300px; word-break: break-all;">${evt.details}</td>
+                            </tr>
+                        `).join('');
+                    }
+
+                    document.getElementById('log-page-indicator').innerText = `Page ${logCurrentPage}`;
+                }
+            } catch (err) {
+                console.error("Error loading events", err);
+            }
+        }
+
+        async function seedSmtpConfigs() {
+            const defaults = [
+                { key: 'smtp_host', value: '{"value":"smtp.mailtrap.io"}', category: 'notifications' },
+                { key: 'smtp_port', value: '{"value":"2525"}', category: 'notifications' },
+                { key: 'smtp_username', value: '{"value":""}', category: 'notifications' },
+                { key: 'smtp_password', value: '{"value":""}', category: 'notifications' },
+                { key: 'smtp_from', value: '{"value":"alerts@nullsploit.local"}', category: 'notifications' },
+                { key: 'smtp_to', value: '{"value":"admin@nullsploit.local"}', category: 'notifications' },
+                { key: 'smtp_enabled', value: '{"value":"false"}', category: 'notifications' },
+                { key: 'smtp_auth', value: '{"value":"true"}', category: 'notifications' },
+                { key: 'smtp_tls', value: '{"value":"true"}', category: 'notifications' }
+            ];
+
+            showStatus('Seeding SMTP configurations...', 'info');
+            for (const cfg of defaults) {
+                await authFetch(`${API_BASE}/config`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(cfg)
+                });
+            }
+
+            showStatus('Default SMTP Configs seeded');
+            fetchData();
+        }
+
+        async function sendTestEmail() {
+            showStatus('Transmitting test email connection check...', 'info');
+            try {
+                const res = await authFetch(`${API_BASE}/config/test-email`, {
+                    method: 'POST'
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        showStatus('Test alert email sent successfully!');
+                    } else {
+                        showStatus('SMTP error: ' + (data.error || 'check SMTP credentials'), 'error');
+                    }
+                } else {
+                    showStatus('Failed to communicate with test endpoint', 'error');
+                }
+            } catch (err) {
+                showStatus('Connection failed: ' + err.message, 'error');
+            }
+        }
+
+        async function fetchData() {
+            try {
+                // 1. Stats
+                await loadDashboardStats();
 
                 // 2. Events & Log
-                const eventsRes = await fetch(`${API_BASE}/events?limit=50`);
+                const eventsRes = await authFetch(`${API_BASE}/events?limit=10`);
                 if (eventsRes.ok) {
                     const events = await eventsRes.json();
                     
                     // Live Threat Log (last 10)
                     const liveBody = document.querySelector('#live-threat-table tbody');
-                    liveBody.innerHTML = events.slice(0, 10).map(evt => `
+                    liveBody.innerHTML = events.map(evt => `
                         <tr>
                             <td>${new Date(evt.timestamp * 1000).toLocaleString()}</td>
                             <td style="color: #ef4444; font-weight: bold;">${evt.src_ip}</td>
@@ -570,24 +946,13 @@
                             <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${evt.payload_preview}</td>
                         </tr>
                     `).join('');
-
-                    // Full Events Log
-                    const fullBody = document.querySelector('#full-events-table tbody');
-                    fullBody.innerHTML = events.map(evt => `
-                        <tr>
-                            <td>${new Date(evt.timestamp * 1000).toLocaleString()}</td>
-                            <td style="color: #ef4444; font-weight: bold;">${evt.src_ip}</td>
-                            <td>${evt.dest_ip}</td>
-                            <td>${evt.src_port} / ${evt.dest_port}</td>
-                            <td>${getThreatName(evt.threat_type)}</td>
-                            <td>${getSeverityBadge(evt.severity)}</td>
-                            <td style="max-width: 300px; word-break: break-all;">${evt.details}</td>
-                        </tr>
-                    `).join('');
                 }
 
+                // Load Full log list
+                await loadFullEvents();
+
                 // 3. Agents
-                const agentsRes = await fetch(`${API_BASE}/agents`);
+                const agentsRes = await authFetch(`${API_BASE}/agents`);
                 if (agentsRes.ok) {
                     const agents = await agentsRes.json();
                     document.getElementById('stat-agents').innerText = `${agents.filter(a => a.status === 'active').length} / ${agents.length}`;
@@ -618,34 +983,63 @@
                         `).join('');
                     }
 
-                    // Populate select dropdown
+                    // Populate select dropdown & overview filter node select
                     const select = document.getElementById('block-agent-uuid');
                     if (select) {
                         select.innerHTML = agents.map(a => `<option value="${a.uuid}">${a.hostname} (${a.uuid.substring(0,8)})</option>`).join('');
                     }
+
+                    const filterNodeSelect = document.getElementById('filter-node');
+                    if (filterNodeSelect) {
+                        const currentVal = filterNodeSelect.value;
+                        filterNodeSelect.innerHTML = '<option value="all">All Nodes</option>' + agents.map(a => `<option value="${a.uuid}">${a.hostname} (${a.uuid.substring(0,8)})</option>`).join('');
+                        filterNodeSelect.value = currentVal || 'all';
+                    }
                 }
 
-                // 4. Reputation
-                const repRes = await fetch(`${API_BASE}/reputation`);
-                if (repRes.ok) {
-                    const rep = await repRes.json();
-                    document.getElementById('stat-indicators').innerText = rep.filter(r => r.score >= 80).length;
+                // 4. Local Reputation
+                const localRepRes = await authFetch(`${API_BASE}/reputation?type=local`);
+                if (localRepRes.ok) {
+                    const localRep = await localRepRes.json();
+                    const localRepBody = document.querySelector('#local-reputation-table tbody');
+                    if (localRep.length === 0) {
+                        localRepBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #9ca3af; padding: 16px;">No WAF local node reputation matrix alerts loaded.</td></tr>`;
+                    } else {
+                        localRepBody.innerHTML = localRep.map(r => `
+                            <tr>
+                                <td><strong>${r.ip}</strong></td>
+                                <td><span class="badge ${r.local_score >= 80 ? 'badge-critical' : r.local_score >= 40 ? 'badge-warning' : 'badge-info'}">${r.local_score} / 100</span></td>
+                                <td>${r.attack_types || 'None'}</td>
+                                <td>${r.updated_at}</td>
+                                <td><button onclick="clearReputation('${r.ip}')" style="background: transparent; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem;">CLEAR</button></td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+
+                // 4b. External Reputation
+                const extRepRes = await authFetch(`${API_BASE}/reputation?type=external`);
+                if (extRepRes.ok) {
+                    const extRep = await extRepRes.json();
+                    document.getElementById('stat-indicators').innerText = extRep.filter(r => r.external_score >= 80).length;
                     
-                    const repBody = document.querySelector('#reputation-table tbody');
-                    repBody.innerHTML = rep.map(r => `
-                        <tr>
-                            <td><strong>${r.ip}</strong></td>
-                            <td><span class="badge ${r.score >= 80 ? 'badge-critical' : r.score >= 40 ? 'badge-warning' : 'badge-info'}">${r.score} / 100</span></td>
-                            <td>${r.local_score}</td>
-                            <td>${r.external_score}</td>
-                            <td>${r.attack_types || 'None'}</td>
-                            <td>${r.updated_at}</td>
-                        </tr>
-                    `).join('');
+                    const extRepBody = document.querySelector('#external-reputation-table tbody');
+                    if (extRep.length === 0) {
+                        extRepBody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #9ca3af; padding: 16px;">No external threat intel feed data loaded.</td></tr>`;
+                    } else {
+                        extRepBody.innerHTML = extRep.map(r => `
+                            <tr>
+                                <td><strong>${r.ip}</strong></td>
+                                <td><span class="badge ${r.external_score >= 80 ? 'badge-critical' : r.external_score >= 40 ? 'badge-warning' : 'badge-info'}">${r.external_score} / 100</span></td>
+                                <td>${r.attack_types || 'None'}</td>
+                                <td>${r.updated_at}</td>
+                            </tr>
+                        `).join('');
+                    }
                 }
 
                 // 5. Yara Rules
-                const yaraRes = await fetch(`${API_BASE}/yara/rules`);
+                const yaraRes = await authFetch(`${API_BASE}/yara/rules`);
                 if (yaraRes.ok) {
                     const rules = await yaraRes.json();
                     const yaraList = document.getElementById('yara-list');
@@ -661,9 +1055,43 @@
                 }
 
                 // 6. Configs
-                const configsRes = await fetch(`${API_BASE}/config`);
+                const configsRes = await authFetch(`${API_BASE}/config`);
                 if (configsRes.ok) {
                     const configs = await configsRes.json();
+                    
+                    // Populate SMTP form fields if they exist in configs
+                    configs.forEach(c => {
+                        let parsedVal = "";
+                        try {
+                            let val = c.value;
+                            for (let i = 0; i < 3; i++) {
+                                if (typeof val === 'string') {
+                                    try {
+                                        val = JSON.parse(val);
+                                    } catch (err) {
+                                        break;
+                                    }
+                                }
+                                if (val && typeof val === 'object' && 'value' in val) {
+                                    val = val.value;
+                                }
+                            }
+                            parsedVal = val;
+                        } catch (e) {
+                            parsedVal = c.value;
+                        }
+
+                        if (c.key === 'smtp_host') document.getElementById('smtp-host').value = parsedVal || "";
+                        if (c.key === 'smtp_port') document.getElementById('smtp-port').value = parsedVal || "";
+                        if (c.key === 'smtp_username') document.getElementById('smtp-username').value = parsedVal || "";
+                        if (c.key === 'smtp_password') document.getElementById('smtp-password').value = parsedVal || "";
+                        if (c.key === 'smtp_from') document.getElementById('smtp-from').value = parsedVal || "";
+                        if (c.key === 'smtp_to') document.getElementById('smtp-to').value = parsedVal || "";
+                        if (c.key === 'smtp_enabled') document.getElementById('smtp-enabled').checked = (parsedVal === 'true' || parsedVal === true);
+                        if (c.key === 'smtp_auth') document.getElementById('smtp-auth').checked = (parsedVal === 'true' || parsedVal === true);
+                        if (c.key === 'smtp_tls') document.getElementById('smtp-tls').checked = (parsedVal === 'true' || parsedVal === true);
+                    });
+
                     const list = document.getElementById('configs-list');
                     list.innerHTML = configs.map(c => `
                         <div class="card" style="padding: 16px; margin: 0;">
@@ -675,6 +1103,74 @@
                             <div style="margin-top: 4px; font-size: 0.75rem; color: #9ca3af;">${c.description}</div>
                         </div>
                     `).join('');
+
+                    // Populate Settings Tab Configs
+                    configs.forEach(c => {
+                        let parsedVal = "";
+                        try {
+                            let val = c.value;
+                            for (let i = 0; i < 3; i++) {
+                                if (typeof val === 'string') {
+                                    try { val = JSON.parse(val); } catch(e) { break; }
+                                }
+                                if (val && typeof val === 'object' && 'value' in val) {
+                                    val = val.value;
+                                }
+                            }
+                            parsedVal = val;
+                        } catch(e) {
+                            parsedVal = c.value;
+                        }
+
+                        if (c.key === 'block_local_ips') document.getElementById('settings-block-local').checked = (parsedVal === 'true' || parsedVal === true || parsedVal === '1' || parsedVal === 1);
+                        if (c.key === 'opencode_api_key') document.getElementById('settings-ai-key').value = parsedVal || "";
+                        if (c.key === 'opencode_model') document.getElementById('settings-ai-model').value = parsedVal || "deepseek-v4-flash-free";
+                        if (c.key === 'opencode_url') document.getElementById('settings-ai-url').value = parsedVal || "https://openrouter.ai/api/v1/chat/completions";
+                    });
+                }
+
+                // Load AI Dataset
+                const datasetRes = await authFetch(`${API_BASE}/dataset`);
+                if (datasetRes.ok) {
+                    const dataset = await datasetRes.json();
+                    const datasetBody = document.querySelector('#dataset-table tbody');
+                    if (dataset.length === 0) {
+                        datasetBody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: #9ca3af; padding: 16px;">No AI threat analysis records found.</td></tr>`;
+                    } else {
+                        datasetBody.innerHTML = dataset.map(d => `
+                            <tr>
+                                <td>${d.id}</td>
+                                <td>${d.event_id}</td>
+                                <td>${d.src_ip}</td>
+                                <td>${getThreatName(d.threat_type)}</td>
+                                <td><span class="badge ${d.confidence >= 75 ? 'badge-critical' : 'badge-warning'}">${d.confidence}%</span></td>
+                                <td><span class="badge ${d.threat_detected ? 'badge-critical' : 'badge-info'}">${d.threat_detected ? 'THREAT' : 'CLEAN'}</span></td>
+                                <td style="max-width: 250px; word-break: break-all;">${d.explanation}</td>
+                                <td>${d.model_used}</td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+
+                // 7. Blacklist
+                const blacklistRes = await authFetch(`${API_BASE}/blocklist`);
+                if (blacklistRes.ok) {
+                    const blacklist = await blacklistRes.json();
+                    const body = document.querySelector('#blacklist-table tbody');
+                    if (blacklist.length === 0) {
+                        body.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #9ca3af; padding: 20px;">No active blacklist policies configured.</td></tr>`;
+                    } else {
+                        body.innerHTML = blacklist.map(b => `
+                            <tr>
+                                <td><strong style="color: #f87171; font-family: monospace;">${b.ip_cidr}</strong></td>
+                                <td>${b.reason || 'None'}</td>
+                                <td>${new Date(b.created_at).toLocaleString()}</td>
+                                <td>
+                                    <button onclick="removeFromBlacklist('${b.ip_cidr}')" style="background: transparent; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem;">REMOVE</button>
+                                </td>
+                            </tr>
+                        `).join('');
+                    }
                 }
 
             } catch (err) {
@@ -726,7 +1222,7 @@
             const uuid = document.getElementById('block-agent-uuid').value;
             const ip = document.getElementById('block-agent-ip').value;
 
-            const res = await fetch(`${API_BASE}/agents/${uuid}/block-ip`, {
+            const res = await authFetch(`${API_BASE}/agents/${uuid}/block-ip`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ip })
@@ -745,7 +1241,7 @@
             const name = document.getElementById('yara-name').value;
             const content = document.getElementById('yara-content').value;
 
-            const res = await fetch(`${API_BASE}/yara/rules`, {
+            const res = await authFetch(`${API_BASE}/yara/rules`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, content })
@@ -761,7 +1257,7 @@
         });
 
         async function deleteYaraRule(name) {
-            const res = await fetch(`${API_BASE}/yara/rules/${name}`, {
+            const res = await authFetch(`${API_BASE}/yara/rules/${name}`, {
                 method: 'DELETE'
             });
             if (res.ok) {
@@ -776,7 +1272,7 @@
             const value = document.getElementById('config-value').value;
             const category = document.getElementById('config-category').value;
 
-            const res = await fetch(`${API_BASE}/config`, {
+            const res = await authFetch(`${API_BASE}/config`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ key, value, category })
@@ -789,14 +1285,226 @@
             }
         });
 
+        document.getElementById('blacklist-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const ip_cidr = document.getElementById('blacklist-ip').value;
+            const reason = document.getElementById('blacklist-reason').value;
+
+            const res = await authFetch(`${API_BASE}/blocklist`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip_cidr, reason })
+            });
+            if (res.ok) {
+                showStatus(`IP ${ip_cidr} blacklisted`);
+                document.getElementById('blacklist-ip').value = '';
+                document.getElementById('blacklist-reason').value = '';
+                fetchData();
+            } else {
+                showStatus('Failed to blacklist IP', 'error');
+            }
+        });
+
+        document.getElementById('smtp-settings-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            showStatus('Saving SMTP configurations...', 'info');
+
+            const settings = [
+                { key: 'smtp_host', value: JSON.stringify({ value: document.getElementById('smtp-host').value }), category: 'notifications' },
+                { key: 'smtp_port', value: JSON.stringify({ value: document.getElementById('smtp-port').value }), category: 'notifications' },
+                { key: 'smtp_username', value: JSON.stringify({ value: document.getElementById('smtp-username').value }), category: 'notifications' },
+                { key: 'smtp_password', value: JSON.stringify({ value: document.getElementById('smtp-password').value }), category: 'notifications' },
+                { key: 'smtp_from', value: JSON.stringify({ value: document.getElementById('smtp-from').value }), category: 'notifications' },
+                { key: 'smtp_to', value: JSON.stringify({ value: document.getElementById('smtp-to').value }), category: 'notifications' },
+                { key: 'smtp_enabled', value: JSON.stringify({ value: String(document.getElementById('smtp-enabled').checked) }), category: 'notifications' },
+                { key: 'smtp_auth', value: JSON.stringify({ value: String(document.getElementById('smtp-auth').checked) }), category: 'notifications' },
+                { key: 'smtp_tls', value: JSON.stringify({ value: String(document.getElementById('smtp-tls').checked) }), category: 'notifications' }
+            ];
+
+            try {
+                for (const cfg of settings) {
+                    await authFetch(`${API_BASE}/config`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(cfg)
+                    });
+                }
+                showStatus('SMTP settings saved successfully!');
+                fetchData();
+            } catch (err) {
+                showStatus('Failed to save SMTP settings: ' + err.message, 'error');
+            }
+        });
+
+        async function removeFromBlacklist(ip_cidr) {
+            const res = await authFetch(`${API_BASE}/blocklist?ipCidr=${encodeURIComponent(ip_cidr)}`, {
+                method: 'DELETE'
+            });
+            if (res.ok) {
+                showStatus(`IP ${ip_cidr} removed from blacklist`);
+                fetchData();
+            } else {
+                showStatus('Failed to remove IP from blacklist', 'error');
+            }
+        }
+
+        function decodeUrlHelper() {
+            const input = document.getElementById('encoded-url-input').value;
+            if (input) {
+                try {
+                    const decoded = decodeURIComponent(input);
+                    document.getElementById('yara-content').value = `rule decoded_url_pattern {\n    strings:\n        $url = "${decoded.replace(/"/g, '\\"')}"\n    condition:\n        $url\n}`;
+                    showStatus('URL decoded and converted into a template YARA rule.');
+                } catch(e) {
+                    showStatus('Decoding failed: ' + e.message, 'error');
+                }
+            }
+        }
+
+        async function clearReputation(ip) {
+            if (!confirm(`Are you sure you want to clear reputation for ${ip}?`)) return;
+            const res = await authFetch(`${API_BASE}/reputation?ip=${encodeURIComponent(ip)}`, {
+                method: 'DELETE'
+            });
+            if (res.ok) {
+                showStatus(`Reputation for ${ip} cleared.`);
+                fetchData();
+            } else {
+                showStatus('Failed to clear reputation.', 'error');
+            }
+        }
+
+        async function clearAllReputation() {
+            if (!confirm('Are you sure you want to clear ALL IP reputation data?')) return;
+            const res = await authFetch(`${API_BASE}/reputation`, {
+                method: 'DELETE'
+            });
+            if (res.ok) {
+                showStatus('All IP reputation matrix data cleared.');
+                fetchData();
+            } else {
+                showStatus('Failed to clear reputation.', 'error');
+            }
+        }
+
+        document.getElementById('settings-controls-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const enabled = document.getElementById('settings-block-local').checked;
+            const res = await authFetch(`${API_BASE}/config`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: 'block_local_ips', value: JSON.stringify({ value: String(enabled) }), category: 'firewall' })
+            });
+            if (res.ok) {
+                showStatus('Firewall control settings updated.');
+                fetchData();
+            }
+        });
+
+        document.getElementById('settings-ai-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const key = document.getElementById('settings-ai-key').value;
+            const model = document.getElementById('settings-ai-model').value || 'deepseek-v4-flash-free';
+            const url = document.getElementById('settings-ai-url').value || 'https://openrouter.ai/api/v1/chat/completions';
+            
+            const cfgs = [
+                { key: 'opencode_api_key', value: JSON.stringify({ value: key }), category: 'ai' },
+                { key: 'opencode_model', value: JSON.stringify({ value: model }), category: 'ai' },
+                { key: 'opencode_url', value: JSON.stringify({ value: url }), category: 'ai' }
+            ];
+            
+            try {
+                for (const cfg of cfgs) {
+                    await authFetch(`${API_BASE}/config`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(cfg)
+                    });
+                }
+                showStatus('AI settings updated successfully.');
+                fetchData();
+            } catch (err) {
+                showStatus('Failed to save AI settings: ' + err.message, 'error');
+            }
+        });
+
+        let sseSource = null;
+        function setupSSE() {
+            if (sseSource) sseSource.close();
+            const token = sessionStorage.getItem('session_token');
+            sseSource = new EventSource(`${API_BASE}/events/live?token=${encodeURIComponent(token)}`);
+            sseSource.onmessage = (event) => {
+                try {
+                    const evt = JSON.parse(event.data);
+                    
+                    // Prepend to live threat log table
+                    const liveBody = document.querySelector('#live-threat-table tbody');
+                    if (liveBody) {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td>${new Date(evt.timestamp * 1000).toLocaleString()}</td>
+                            <td style="color: #ef4444; font-weight: bold;">${evt.src_ip}</td>
+                            <td>${evt.dest_ip}</td>
+                            <td>${getThreatName(evt.threat_type)}</td>
+                            <td>${getSeverityBadge(evt.severity)}</td>
+                            <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${evt.payload_preview}</td>
+                        `;
+                        liveBody.insertBefore(tr, liveBody.firstChild);
+                        if (liveBody.children.length > 10) {
+                            liveBody.removeChild(liveBody.lastChild);
+                        }
+                    }
+
+                    // Increment stats
+                    const el = document.getElementById('stat-events');
+                    if (el) {
+                        el.innerText = parseInt(el.innerText || '0') + 1;
+                    }
+
+                    // Prepend to full events if on page 1
+                    if (logCurrentPage === 1) {
+                        const fullBody = document.querySelector('#full-events-table tbody');
+                        if (fullBody) {
+                            const fullTr = document.createElement('tr');
+                            fullTr.innerHTML = `
+                                <td>${new Date(evt.timestamp * 1000).toLocaleString()}</td>
+                                <td style="color: #ef4444; font-weight: bold;">${evt.src_ip}</td>
+                                <td>${evt.dest_ip}</td>
+                                <td>${evt.src_port} / ${evt.dest_port}</td>
+                                <td>${getThreatName(evt.threat_type)}</td>
+                                <td>${getSeverityBadge(evt.severity)}</td>
+                                <td style="max-width: 300px; word-break: break-all;">${evt.details}</td>
+                            `;
+                            fullBody.insertBefore(fullTr, fullBody.firstChild);
+                            if (fullBody.children.length > logPageLimit) {
+                                fullBody.removeChild(fullBody.lastChild);
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.error("SSE parse error", err);
+                }
+            };
+            sseSource.onerror = (err) => {
+                console.warn("SSE connection lost. Reconnecting in 5s...", err);
+                sseSource.close();
+                setTimeout(setupSSE, 5000);
+            };
+        }
+
         // Check session token status
         function checkSession() {
             const token = sessionStorage.getItem('session_token');
             const overlay = document.getElementById('login-overlay');
             if (token) {
                 overlay.style.display = 'none';
+                setupSSE();
             } else {
                 overlay.style.display = 'flex';
+                if (sseSource) {
+                    sseSource.close();
+                    sseSource = null;
+                }
             }
         }
 

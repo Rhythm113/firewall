@@ -211,7 +211,8 @@ A keep-alive ping (\texttt{MSG\_TYPE\_PING}) is sent when the channel is idle fo
 
 \begin{codeblock}
 # /etc/fw_inspect/blocklist.txt
-# One CIDR entry per line
+# Directives and CIDR entries (one per line)
+block_local_ips=0   # 0 = Allow local IPs but log threats; 1 = Block local IPs
 10.0.0.0/8
 192.168.1.50/32
 \end{codeblock}
@@ -387,16 +388,17 @@ Action             & DROP  & Connection dropped; WARNING sent instantly to SOC \
 \vspace{1.5em}
 \textbf{10. IP BLOCKLIST HASH TABLE}\\
 ------------------------------------------------------------\\
-The blocklist table utilizes an 8-bit hash index with 256 dynamic buckets to store blacklisted hosts and CIDR ranges. Updates are dynamic:
+The blocklist table utilizes an 8-bit hash index with 256 dynamic buckets to store blacklisted hosts and CIDR ranges. The file also supports a configuration directive to define how LAN and loopback IP traffic is handled during detection events:
 
 \begin{codeblock}
 # /etc/fw_inspect/blocklist.txt
+block_local_ips=0   # 0 = Bypass drop verdicts on local IPs but log events
 10.0.0.0/8
 192.168.1.50/32
 45.33.32.0/24
 \end{codeblock}
 
-SIGHUP triggers live kernel-level updates without disconnecting current web sockets.
+If \texttt{block\_local\_ips} is set to 0 (default), threats originating from local private networks (RFC 1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8) are allowed to pass through, but the alert is still sent to the SOC server for analysis. If set to 1, local IP threats are dropped. SIGHUP triggers live updates to this configuration without restarts.
 
 \vspace{1.5em}
 \textbf{11. AUTHENTICATION \& ACCESS CONTROL}\\

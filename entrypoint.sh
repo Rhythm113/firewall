@@ -26,14 +26,15 @@ UPLOAD_DIR_PATH=${UPLOAD_DIR:-/var/www/uploads}
 mkdir -p "$UPLOAD_DIR_PATH"
 chown -R www-data:www-data "$UPLOAD_DIR_PATH"
 chmod 777 "$UPLOAD_DIR_PATH"
+chown -R www-data:www-data /usr/local/apache2/htdocs
 
 echo "[entrypoint] Starting PHP-FPM daemon..."
 /usr/sbin/php-fpm7.4 -D
 
 
 echo "[entrypoint] Setting up Netfilter iptables rules for NFQUEUE..."
-# Intercept incoming port 80 (HTTP) traffic and send it to NFQUEUE queue 0
-iptables -A INPUT -p tcp --dport 80 -j NFQUEUE --queue-num 0
+# Intercept incoming port 80 (HTTP) and port 443 (HTTPS) traffic and send it to NFQUEUE queue 0
+iptables -A INPUT -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 0
 
 echo "[entrypoint] Generating PGP key pair for agent if not exists..."
 if [ ! -d "/root/.gnupg" ] || [ ! -f "/root/.gnupg/pubring.kbx" ]; then

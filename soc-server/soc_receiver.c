@@ -727,10 +727,17 @@ int main(int argc, char **argv) {
                         char agent_uuid_hex[33];
                         uint8_t command_type;
                         uint32_t ip;
-                    } cmd;
+                    } __attribute__((packed)) cmd;
                     
-                    int bytes = read(client_fd, &cmd, sizeof(cmd));
-                    if (bytes == sizeof(cmd)) {
+                    int total_read = 0;
+                    char *ptr = (char *)&cmd;
+                    while (total_read < sizeof(cmd)) {
+                        int r = read(client_fd, ptr + total_read, sizeof(cmd) - total_read);
+                        if (r <= 0) break;
+                        total_read += r;
+                    }
+                    
+                    if (total_read == sizeof(cmd)) {
                         cmd.agent_uuid_hex[32] = '\0';
                         printf("[receiver] Received local control command: Block IP %u for Agent %s\n", cmd.ip, cmd.agent_uuid_hex);
                         send_command_to_agent(cmd.agent_uuid_hex, cmd.command_type, &cmd.ip, sizeof(cmd.ip));

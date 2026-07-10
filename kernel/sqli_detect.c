@@ -113,7 +113,10 @@ int detect_sqli(const char *payload, int payload_len,
 
         // Word token
         int t_idx = 0;
-        while (idx < dec_len && !isspace((unsigned char)decoded[idx]) && !strchr("=><!();#',\"/*", decoded[idx]) && t_idx < 63) {
+        while (idx < dec_len && !isspace((unsigned char)decoded[idx]) && 
+               !strchr("=><!();#',\"/*", decoded[idx]) && 
+               !(decoded[idx] == '-' && idx + 1 < dec_len && decoded[idx+1] == '-') &&
+               t_idx < 63) {
             tokens[token_count][t_idx++] = decoded[idx++];
         }
         tokens[token_count][t_idx] = '\0';

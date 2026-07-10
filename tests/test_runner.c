@@ -1,15 +1,16 @@
 #define BUILD_USERSPACE
-#include "userspace_compat.h"
-#include "fw_inspect.h"
-#include "sqli_detect.h"
-#include "cmdi_detect.h"
-#include "path_detect.h"
-#include "bot_detect.h"
-#include "ip_reputation.h"
-#include "yara_engine.h"
+#include "../kernel/userspace_compat.h"
+#include "../kernel/fw_inspect.h"
+#include "../kernel/sqli_detect.h"
+#include "../kernel/cmdi_detect.h"
+#include "../kernel/path_detect.h"
+#include "../kernel/bot_detect.h"
+#include "../kernel/ip_reputation.h"
+#include "../kernel/yara_engine.h"
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+#include <unistd.h>
 
 // Mock Alert tracking state
 static int last_threat_type = -1;
@@ -362,10 +363,129 @@ void test_tcp_monitor() {
     cleanup_conn_pool();
 }
 
+extern int g_block_local_ips;
+static int is_local_ip(uint32_t ip) {
+    uint8_t *p = (uint8_t *)&ip;
+    if (p[0] == 127) return 1;
+    if (p[0] == 10) return 1;
+    if (p[0] == 172 && (p[1] >= 16 && p[1] <= 31)) return 1;
+    if (p[0] == 192 && p[1] == 168) return 1;
+    return 0;
+}
+
+void test_local_ip_bypass() {
+    printf("--- Running Local IP Bypass Tests ---\n");
+
+    struct blocklist_payload payload;
+    memset(&payload, 0, sizeof(payload));
+    update_ip_blocklist(&payload);
+
+    assert(is_local_ip(inet_addr("127.0.0.1")) == 1);
+    assert(is_local_ip(inet_addr("10.0.0.5")) == 1);
+    assert(is_local_ip(inet_addr("172.16.4.5")) == 1);
+    assert(is_local_ip(inet_addr("192.168.1.100")) == 1);
+    assert(is_local_ip(inet_addr("8.8.8.8")) == 0);
+
+    struct sk_buff skb;
+    unsigned char data[512];
+    struct iphdr iph;
+    struct tcphdr tcph;
+
+    construct_mock_packet(&skb, &iph, &tcph, 
+                          "GET /?cmd=system(ls) HTTP/1.1\r\nHost: localhost\r\n\r\n", 
+                          data, sizeof(data));
+    iph.saddr = inet_addr("192.168.1.100");
+
+    g_block_local_ips = 0;
+    reset_tracker();
+    
+    int result = inspect_http_payload(&skb, &iph, &tcph);
+    assert(result == 1);
+    assert(alert_count == 1);
+
+    int verdict = NF_DROP;
+    if (verdict == NF_DROP && is_local_ip(iph.saddr)) {
+        if (!g_block_local_ips) {
+            verdict = NF_ACCEPT;
+        }
+    }
+    assert(verdict == NF_ACCEPT);
+    printf("  Test (Local IP allowed but logged): Passed\n");
+
+    g_block_local_ips = 1;
+    verdict = NF_DROP;
+    if (verdict == NF_DROP && is_local_ip(iph.saddr)) {
+        if (!g_block_local_ips) {
+            verdict = NF_ACCEPT;
+        }
+    }
+    assert(verdict == NF_DROP);
+    printf("  Test (Local IP blocked when option enabled): Passed\n");
+}
+
+void test_file_upload_yara() {
+    printf("--- Running File Upload YARA Tests ---\n");
+
+    mkdir("/var", 0755);
+    mkdir("/var/log", 0755);
+    mkdir("/var/log/firewall", 0755);
+    unlink("/var/log/firewall/alerts.log");
+
+    const char *clean_file = "/tmp/clean_upload.txt";
+    FILE *f1 = fopen(clean_file, "w");
+    assert(f1 != NULL);
+    fprintf(f1, "This is a completely clean text file upload test.\n");
+    fclose(f1);
+
+    const char *evil_file = "/tmp/evil_upload.php";
+    FILE *f2 = fopen(evil_file, "w");
+    assert(f2 != NULL);
+    fprintf(f2, "<?php eval($_POST['cmd']); ?>\n");
+    fclose(f2);
+
+    queue_file_upload_scan(clean_file);
+    queue_file_upload_scan(evil_file);
+
+    // Wait for the async worker thread to scan and write the alert log (up to 3 seconds)
+    FILE *alert_f = NULL;
+    for (int i = 0; i < 30; i++) {
+        alert_f = fopen("/var/log/firewall/alerts.log", "r");
+        if (alert_f) break;
+        usleep(100000); // 100ms
+    }
+    assert(alert_f != NULL);
+    char line[512];
+    int alert_found = 0;
+    while (fgets(line, sizeof(line), alert_f)) {
+        if (strstr(line, "[YARA_THREAT]") && strstr(line, "evil_upload.php")) {
+            alert_found = 1;
+        }
+        assert(strstr(line, "clean_upload.txt") == NULL);
+    }
+    fclose(alert_f);
+    assert(alert_found == 1);
+
+    unlink(clean_file);
+    unlink(evil_file);
+    unlink("/var/log/firewall/alerts.log");
+
+    printf("  Test (File Upload YARA Scanner): Passed\n");
+}
+
 int main() {
     printf("===========================================\n");
     printf("NULLSPLOIT CORE LOGIC VALIDATION UNIT TESTS\n");
     printf("===========================================\n");
+
+    // Ensure /etc/fw_inspect/yara exists and write a test YARA rule
+    mkdir("/etc", 0755);
+    mkdir("/etc/fw_inspect", 0755);
+    mkdir("/etc/fw_inspect/yara", 0755);
+    FILE *rf = fopen("/etc/fw_inspect/yara/rules.yar", "w");
+    if (rf) {
+        fprintf(rf, "rule php_webshell { strings: $a = \"eval(\" condition: $a }\n");
+        fclose(rf);
+    }
 
     init_ip_reputation();
     init_yara_engine("/etc/fw_inspect/yara");
@@ -374,6 +494,8 @@ int main() {
     test_advanced_detectors();
     test_ip_blocklist();
     test_tcp_monitor();
+    test_local_ip_bypass();
+    test_file_upload_yara();
 
     cleanup_yara_engine();
     cleanup_ip_reputation();

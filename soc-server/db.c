@@ -257,10 +257,32 @@ int db_init(const char *conninfo) {
     }
     PQclear(res);
 
+    // Create ai_analysis_dataset table
+    res = PQexec(conn,
+        "CREATE TABLE IF NOT EXISTS ai_analysis_dataset ("
+        "  id SERIAL PRIMARY KEY,"
+        "  event_id BIGINT UNIQUE REFERENCES events(id) ON DELETE CASCADE,"
+        "  threat_detected BOOLEAN NOT NULL,"
+        "  confidence INTEGER NOT NULL,"
+        "  explanation TEXT,"
+        "  model_used TEXT,"
+        "  analyzed_at TIMESTAMPTZ DEFAULT NOW()"
+        ");");
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        fprintf(stderr, "[db] Failed to create ai_analysis_dataset table: %s\n", PQerrorMessage(conn));
+        PQclear(res);
+        return -1;
+    }
+    PQclear(res);
+
     // Create indexes
     PQexec(conn, "CREATE INDEX IF NOT EXISTS idx_events_time ON events(timestamp DESC);");
     PQexec(conn, "CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent_uuid);");
     PQexec(conn, "CREATE INDEX IF NOT EXISTS idx_blocklist_type ON blocklist(list_type);");
+    PQexec(conn, "CREATE INDEX IF NOT EXISTS idx_ai_dataset_event ON ai_analysis_dataset(event_id);");
+
+    // Clean up duplicate threat profiles in existing database records
+    PQexec(conn, "UPDATE ip_reputation SET attack_types = ARRAY(SELECT DISTINCT unnest(attack_types)) WHERE attack_types IS NOT NULL;");
 
     printf("[db] PostgreSQL database tables initialized successfully\n");
     return 0;
@@ -590,7 +612,7 @@ int db_update_ip_reputation(const char *ip, int score, int local_score, int exte
         "VALUES ($1, $2, $3, $4, string_to_array($5, ','), NOW()) "
         "ON CONFLICT (ip) DO UPDATE SET "
         "score = EXCLUDED.score, local_score = EXCLUDED.local_score, external_score = EXCLUDED.external_score, "
-        "attack_types = array_cat(ip_reputation.attack_types, EXCLUDED.attack_types), last_seen = NOW(), updated_at = NOW();";
+        "attack_types = ARRAY(SELECT DISTINCT unnest(array_cat(coalesce(ip_reputation.attack_types, '{}'::text[]), coalesce(EXCLUDED.attack_types, '{}'::text[])))), last_seen = NOW(), updated_at = NOW();";
 
     char score_str[16], local_str[16], ext_str[16];
     snprintf(score_str, sizeof(score_str), "%d", score);
@@ -612,11 +634,11 @@ int db_update_ip_reputation(const char *ip, int score, int local_score, int exte
 char *db_get_reputation_json(const char *ip) {
     PGresult *res;
     if (ip) {
-        const char *sql = "SELECT ip::text, score, local_score, external_score, array_to_string(attack_types, ','), updated_at FROM ip_reputation WHERE ip = $1;";
+        const char *sql = "SELECT host(ip) as ip, score, local_score, external_score, array_to_string(attack_types, ','), updated_at FROM ip_reputation WHERE ip = $1;";
         const char *paramValues[1] = { ip };
         res = PQexecParams(conn, sql, 1, NULL, paramValues, NULL, NULL, 0);
     } else {
-        const char *sql = "SELECT ip::text, score, local_score, external_score, array_to_string(attack_types, ','), updated_at FROM ip_reputation ORDER BY score DESC LIMIT 100;";
+        const char *sql = "SELECT host(ip) as ip, score, local_score, external_score, array_to_string(attack_types, ','), updated_at FROM ip_reputation ORDER BY score DESC LIMIT 100;";
         res = PQexec(conn, sql);
     }
 

@@ -68,6 +68,41 @@ static uint32_t conn_hash(uint32_t ip, uint16_t port) {
 // External callback to send event to userspace agent
 extern void send_fw_event(struct fw_event *event);
 
+// Helper to count active incomplete connections for an IP
+static int count_open_connections(uint32_t ip) {
+    int count = 0;
+    if (!conn_pool) return 0;
+    for (int i = 0; i < MAX_TRACKED_CONNS; i++) {
+        if (conn_pool[i].src_ip == ip && conn_pool[i].src_ip != 0 && 
+            !conn_pool[i].is_http_complete && !conn_pool[i].is_blocked) {
+            count++;
+        }
+    }
+    return count;
+}
+
+// Track when HTTP headers are sent on a socket
+void register_http_header_sent(uint32_t ip, uint16_t port) {
+    if (!conn_pool) return;
+    uint32_t index = conn_hash(ip, port);
+    spin_lock(&pool_lock);
+    if (conn_pool[index].src_ip == ip && conn_pool[index].src_port == port) {
+        conn_pool[index].http_header_count++;
+    }
+    spin_unlock(&pool_lock);
+}
+
+// Track when HTTP request headers are complete (\r\n\r\n found)
+void register_http_complete(uint32_t ip, uint16_t port) {
+    if (!conn_pool) return;
+    uint32_t index = conn_hash(ip, port);
+    spin_lock(&pool_lock);
+    if (conn_pool[index].src_ip == ip && conn_pool[index].src_port == port) {
+        conn_pool[index].is_http_complete = 1;
+    }
+    spin_unlock(&pool_lock);
+}
+
 // Core TCP stats monitoring (SYN flood & Slowloris)
 int monitor_tcp_stats(struct iphdr *iph, struct tcphdr *tcph) {
     uint32_t src_ip = iph->saddr;
@@ -82,6 +117,15 @@ int monitor_tcp_stats(struct iphdr *iph, struct tcphdr *tcph) {
 
     spin_lock(&pool_lock);
     conn = &conn_pool[index];
+
+    // Clean up connection states immediately when FIN or RST is seen
+    if (tcph->fin || tcph->rst) {
+        if (conn->src_ip == src_ip && conn->src_port == src_port) {
+            memset(conn, 0, sizeof(struct conn_state));
+        }
+        spin_unlock(&pool_lock);
+        return 0;
+    }
 
     // If entry is empty or occupied by another connection, reclaim it
     if (conn->src_ip != src_ip || conn->src_port != src_port) {
@@ -112,6 +156,13 @@ int monitor_tcp_stats(struct iphdr *iph, struct tcphdr *tcph) {
     }
 
     conn->last_seen = now;
+
+    // Track payload sent for Slowloris (HTTP on 80, HTTPS on 443)
+    uint16_t dport = ntohs(dest_port);
+    int tcp_payload_len = ntohs(iph->tot_len) - (iph->ihl * 4) - (tcph->doff * 4);
+    if ((dport == 80 || dport == 443) && tcp_payload_len > 0) {
+        conn->http_header_count++;
+    }
 
     // 1. SYN Flood Detection
     if (tcph->syn && !tcph->ack) {
@@ -149,16 +200,17 @@ int monitor_tcp_stats(struct iphdr *iph, struct tcphdr *tcph) {
         return 1; // Drop if flagged blocked
     }
 
-    // 2. Slowloris Detection (port 80 HTTP)
-    if (ntohs(dest_port) == 80 && !conn->is_http_complete) {
+    // 2. Slowloris Detection (port 80 HTTP or 443 HTTPS)
+    if ((dport == 80 || dport == 443) && !conn->is_http_complete) {
         if (conn->http_start_time == 0) {
             conn->http_start_time = now;
         }
 
-        // Check if connection has timed out before completing headers
-        if (time_after(now, conn->http_start_time + (HZ * SLOWLORIS_TIMEOUT))) {
+        // Measure open sockets by IP instantly
+        int open_conns = count_open_connections(src_ip);
+        if (open_conns > 20) { // Limit to 20 concurrent incomplete HTTP requests per IP
             drop_packet = 1;
-            conn->is_blocked = 1; // Block future segments of this connection
+            conn->is_blocked = 1;
 
             struct fw_event event = {
                 .timestamp = ktime_get_real_seconds(),
@@ -167,11 +219,32 @@ int monitor_tcp_stats(struct iphdr *iph, struct tcphdr *tcph) {
                 .src_port = src_port,
                 .dest_port = dest_port,
                 .threat_type = THREAT_SLOWLORIS,
-                .severity = SEVERITY_WARNING,
+                .severity = SEVERITY_CRITICAL,
             };
-            snprintf(event.payload_preview, sizeof(event.payload_preview), "Slowloris Timeout");
-            snprintf(event.details, sizeof(event.details), "HTTP request headers took longer than %d seconds to complete", SLOWLORIS_TIMEOUT);
+            snprintf(event.payload_preview, sizeof(event.payload_preview), "Slowloris (Max Sockets Exceeded)");
+            snprintf(event.details, sizeof(event.details), "IP has %d concurrent incomplete HTTP connections (Limit: 20)", open_conns);
             send_fw_event(&event);
+        }
+        // Check if connection has timed out before completing headers
+        else if (time_after(now, conn->http_start_time + (HZ * SLOWLORIS_TIMEOUT))) {
+            drop_packet = 1;
+            conn->is_blocked = 1; // Block future segments of this connection
+
+            // Ignore timeout warning if no HTTP headers/data were ever sent on this connection (e.g. health check probes)
+            if (conn->http_header_count > 0) {
+                struct fw_event event = {
+                    .timestamp = ktime_get_real_seconds(),
+                    .src_ip = src_ip,
+                    .dest_ip = iph->daddr,
+                    .src_port = src_port,
+                    .dest_port = dest_port,
+                    .threat_type = THREAT_SLOWLORIS,
+                    .severity = SEVERITY_WARNING,
+                };
+                snprintf(event.payload_preview, sizeof(event.payload_preview), "Slowloris Timeout");
+                snprintf(event.details, sizeof(event.details), "HTTP request headers took longer than %d seconds to complete", SLOWLORIS_TIMEOUT);
+                send_fw_event(&event);
+            }
         }
     }
 
