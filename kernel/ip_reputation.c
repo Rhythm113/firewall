@@ -54,7 +54,7 @@ void cleanup_ip_reputation(void) {
 int get_ip_reputation(uint32_t ip) {
     uint32_t bucket = hash_ip(ip);
     pthread_mutex_lock(&rep_lock);
-    
+
     struct reputation_entry *entry = reputation_table[bucket];
     while (entry) {
         if (entry->ip == ip) {
@@ -64,19 +64,19 @@ int get_ip_reputation(uint32_t ip) {
         }
         entry = entry->next;
     }
-    
+
     pthread_mutex_unlock(&rep_lock);
-    return 0;
+    return 100; // Unknown IPs default to perfect reputation
 }
 
-int update_ip_reputation(uint32_t ip, int increment, int threat_type) {
+int update_ip_reputation(uint32_t ip, int damage, int threat_type) {
     uint32_t bucket = hash_ip(ip);
     pthread_mutex_lock(&rep_lock);
-    
+
     struct reputation_entry *entry = reputation_table[bucket];
     while (entry) {
         if (entry->ip == ip) {
-            entry->score += increment;
+            entry->score -= damage;
             if (entry->score > 100) entry->score = 100;
             if (entry->score < 0) entry->score = 0;
             entry->last_seen = time(NULL);
@@ -87,34 +87,34 @@ int update_ip_reputation(uint32_t ip, int increment, int threat_type) {
         }
         entry = entry->next;
     }
-    
-    // Create new entry
+
+    // Create new entry — start at 100 (perfect) and apply damage
     struct reputation_entry *new_entry = malloc(sizeof(struct reputation_entry));
     new_entry->ip = ip;
-    new_entry->score = increment;
+    new_entry->score = 100 - damage;
     if (new_entry->score > 100) new_entry->score = 100;
     if (new_entry->score < 0) new_entry->score = 0;
     new_entry->last_seen = time(NULL);
     new_entry->attack_types_mask = (1 << threat_type);
     new_entry->next = reputation_table[bucket];
     reputation_table[bucket] = new_entry;
-    
+
     int score = new_entry->score;
     pthread_mutex_unlock(&rep_lock);
     return score;
 }
 
-void decay_reputation_scores(int decay_amount) {
+void decay_reputation_scores(int recovery_amount) {
     pthread_mutex_lock(&rep_lock);
-    
+
     for (int i = 0; i < HASH_SIZE; i++) {
         struct reputation_entry *entry = reputation_table[i];
         struct reputation_entry *prev = NULL;
-        
+
         while (entry) {
-            entry->score -= decay_amount;
-            if (entry->score <= 0) {
-                // Remove entry if score decays to 0
+            entry->score += recovery_amount;
+            if (entry->score >= 100) {
+                // Remove entry if reputation has fully recovered
                 struct reputation_entry *tmp = entry;
                 if (prev) {
                     prev->next = entry->next;
@@ -129,6 +129,37 @@ void decay_reputation_scores(int decay_amount) {
             }
         }
     }
+
+    pthread_mutex_unlock(&rep_lock);
+}
+
+#include "fw_inspect.h"
+
+void sync_reputation_with_blocklist(void *payload_ptr) {
+    if (!payload_ptr) return;
+    struct blocklist_payload *payload = (struct blocklist_payload *)payload_ptr;
     
+    pthread_mutex_lock(&rep_lock);
+    for (int i = 0; i < HASH_SIZE; i++) {
+        struct reputation_entry *entry = reputation_table[i];
+        while (entry) {
+            if (entry->score <= 20) {
+                int found = 0;
+                for (uint32_t j = 0; j < payload->count; j++) {
+                    if (payload->entries[j].ip == entry->ip) {
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    unsigned char *octets = (unsigned char *)&(entry->ip);
+                    printf("[reputation] Resetting score of IP %u.%u.%u.%u to 100 (unblocked)\n",
+                           octets[0], octets[1], octets[2], octets[3]);
+                    entry->score = 100;
+                }
+            }
+            entry = entry->next;
+        }
+    }
     pthread_mutex_unlock(&rep_lock);
 }

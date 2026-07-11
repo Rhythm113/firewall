@@ -59,12 +59,14 @@ int inspect_ip_blocklist(uint32_t src_ip) {
     return match;
 }
 
+extern void sync_reputation_with_blocklist(void *payload);
+
 // Update the IP blocklist (atomic swap using RCU/spinlocks)
 void update_ip_blocklist(struct blocklist_payload *payload) {
-    struct blocklist_node *curr;
-    struct hlist_node *tmp;
     int bucket;
     int i;
+    
+    sync_reputation_with_blocklist(payload);
     
     spin_lock(&blocklist_lock);
     g_block_local_ips = payload->block_local_ips;

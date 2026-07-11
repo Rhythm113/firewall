@@ -70,7 +70,7 @@ Status: Approved Documentation
 ------------------------------------------------------------\\
 Nullsploit is a hybrid kernel-userspace network security stack designed to protect Apache web servers from common Layer 4 and Layer 7 network attacks. The system intercepts traffic using Linux's \textbf{Netfilter NFQUEUE} framework, inspects packets for known threat signatures, and forwards encrypted telemetry to a centralised SOC dashboard for real-time monitoring and historical analysis.
 
-The stack has four tightly-integrated components: a userspace NFQUEUE firewall daemon (\texttt{fw\_nfq}), a telemetry agent (\texttt{fw\_agent}), a PGP-encrypted ingest receiver (\texttt{soc\_receiver}), and a real-time web dashboard. These are packaged as isolated Docker containers.
+The stack has four tightly-integrated components: a userspace NFQUEUE firewall daemon (\texttt{fw\_nfq}), a telemetry agent (\texttt{fw\_agent}), an AES-encrypted ingest receiver (\texttt{soc\_receiver}), and a real-time web dashboard. These are packaged as isolated Docker containers.
 
 \textbf{1.1 Key Capabilities}\\
 Below is a summary of the technical defense mechanisms and architectural features provided by the Nullsploit stack:
@@ -85,7 +85,7 @@ XSS Detection        & Case-insensitive scan for cross-site scripting vectors \\
 SYN Flood Mitigation & Sliding-window rate limiting on TCP SYN packets per source IP \\
 Slowloris Detection  & Timeout-based tracking of incomplete HTTP header connections \\
 IP Blocklist         & CIDR-range lookups in a kernel-side hash table; hot-reloadable \\
-PGP Encryption       & All agent-to-SOC telemetry encrypted with GPG public-key crypto \\
+AES Encryption       & All agent-to-SOC telemetry encrypted with symmetric AES-256-CBC \\
 Live Dashboard       & SSE live event feed with Chart.js visualisations on port 8443 \\
 Secure Auth          & bcrypt passwords, HMAC-SHA256 signed session tokens \\
 \hline
@@ -105,9 +105,9 @@ The operational flow begins at the packet interception layer and moves up throug
 Network L4/L7 & iptables NFQUEUE & Redirect TCP/80 to queue 0 for userspace inspection \\
 Userspace     & fw\_nfq Daemon   & Dequeue packets, inspect, issue NF\_ACCEPT or NF\_DROP \\
 IPC           & UNIX Socket      & Transfer fw\_event structs from fw\_nfq to fw\_agent \\
-Telemetry     & fw\_agent        & PGP-encrypt; send instantly (WARNING+) or batch (INFO) \\
+Telemetry     & fw\_agent        & AES-encrypt; send instantly (WARNING+) or batch (INFO) \\
 Transport     & TCP Port 1113    & Encrypted channel to the SOC container \\
-Ingest        & soc\_receiver    & epoll loop, decrypts PGP payloads, writes to SQLite \\
+Ingest        & soc\_receiver    & epoll loop, decrypts AES payloads, writes to SQLite \\
 Storage       & SQLite           & Persistent event store at /var/lib/soc/soc.db \\
 Presentation  & Web Dashboard    & REST API, SSE live feed, Chart.js on port 8443 \\
 \hline
@@ -115,7 +115,7 @@ Presentation  & Web Dashboard    & REST API, SSE live feed, Chart.js on port 844
 \end{center}
 
 \textbf{2.1 Container Network Topology}\\
-Both containers share the Docker bridge network. Service discovery uses container names as DNS hostnames. PGP keys are exchanged via a shared host volume at \texttt{./keys}.
+Both containers share the Docker bridge network. Service discovery uses container names as DNS hostnames. Agent UUIDs are stored in a shared volume at \texttt{./keys}.
 
 \newpage
 \textbf{2.2 Architecture Diagram}\\
@@ -132,9 +132,9 @@ The visual flow below details packet redirection and telemetry pathways:
   |     (inspect packet payloads)     |
   |              |  UNIX IPC          |
   |          fw_agent                 |
-  |      (PGP encrypt & send)         |
+  |      (AES encrypt & send)         |
   +-------------+---------------------+
-                |   TCP:1113  (PGP)
+                |   TCP:1113  (AES)
                 v
   +-----------------------------------+
   |      SOC SERVER CONTAINER         |
@@ -223,13 +223,9 @@ block_local_ips=0   # 0 = Allow local IPs but log threats; 1 = Block local IPs
 The endpoint engine is written in C as a single-threaded server leveraging \texttt{epoll(7)}. It processes agent streams, decryption, database persistence, and websocket/SSE events on distinct ports.
 
 \textbf{5.1 Decryption Pipeline}\\
-Encrypted payloads received from verified agents are processed via a system execution fork using the GnuPG backend wrapper:
+Encrypted payloads received from verified agents are processed in-memory using OpenSSL libcrypto's AES-256-CBC implementation. The 16-byte initialization vector (IV) is extracted from the beginning of the incoming payload, and decryption is performed symmetrically using the pre-shared key.
 
-\begin{codeblock}
-gpg --decrypt --batch --yes --output /tmp/event.bin /tmp/event.pgp
-\end{codeblock}
-
-Decrypted telemetry is extracted into memory, verified against buffer limits, and inserted into the SQLite database. Registered web browsers connected to \texttt{/api/events/live} are simultaneously notified using Server-Sent Events (SSE).
+Decrypted telemetry is verified against buffer limits and inserted into the PostgreSQL database. Registered web browsers connected to the dashboard are simultaneously notified using Server-Sent Events (SSE).
 
 \vspace{1.5em}
 \textbf{6. COMPONENT: WEB DASHBOARD}\\
@@ -271,38 +267,35 @@ GET  & /api/\allowbreak events/\allowbreak live & SSE stream of live events \\
 \end{center}
 
 \vspace{1.5em}
-\textbf{7. PGP ENCRYPTED TRANSPORT PROTOCOL}\\
+\textbf{7. AES ENCRYPTED TRANSPORT PROTOCOL}\\
 ------------------------------------------------------------\\
-The server-agent network link is encrypted end-to-end. Public keys are generated on startup and synced using a common Docker storage volume.
+The server-agent network link is encrypted end-to-end. Communication uses symmetric AES-256-CBC encryption.
 
-\textbf{7.1 Trust Key Exchange Sequence}\\
-The automated handshaking routine is defined below:
+\textbf{7.1 Cryptographic Parameters}\\
+The symmetric parameters are structured below:
 
 \begin{center}
 \begin{tabular}{C{1.0cm} L{3.5cm} L{10.0cm}}
 \hline
-\thfmt{Step} & \thfmt{Container} & \thfmt{Action} \\
+\thfmt{No.} & \thfmt{Parameter} & \thfmt{Action} \\
 \hline
-1 & soc-server    & Generate RSA-2048 keypair for soc@soc.local \\
-2 & soc-server    & Export public key to /etc/keys/soc\_pubkey.asc \\
-3 & apache-server & Generate RSA-2048 keypair for agent@soc.local \\
-4 & apache-server & Import SOC public key from shared volume \\
-5 & apache-server & Export agent public key to shared volume \\
-6 & soc-server    & Key watcher detects agent\_pubkey.asc (SHA-256 change) and imports \\
-7 & Both          & Trust established. Agent encrypts all messages with SOC key. \\
+1 & Algorithm & AES-256-CBC (Advanced Encryption Standard) \\
+2 & Key Size & 256 bits (32 bytes) pre-shared key \\
+3 & IV Generation & Cryptographically random 16 bytes generated per packet \\
+4 & Decryption & Sourced directly from the prepended 16-byte header payload \\
 \hline
 \end{tabular}
 \end{center}
 
 \textbf{7.2 Frame Structure}\\
-The low-level network header prepended to the PGP ciphertext matches the following protocol struct:
+The low-level network header prepended to the AES ciphertext matches the following protocol struct:
 
 \begin{codeblock}
 struct soc_msg_hdr {
     uint32_t magic;           /* 0xDEADBEEF - validates message framing     */
     uint8_t  msg_type;        /* 0=PING  1=BATCH  2=ALERT                   */
     uint8_t  agent_uuid[16];  /* Unique per-agent identifier                */
-    uint32_t payload_len;     /* Length of the following PGP ciphertext     */
+    uint32_t payload_len;     /* Length of the following AES ciphertext     */
 };
 \end{codeblock}
 

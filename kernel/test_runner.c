@@ -211,18 +211,18 @@ void test_advanced_detectors() {
     // IP Reputation Test
     {
         uint32_t ip = inet_addr("198.51.100.12");
-        assert(get_ip_reputation(ip) == 0);
-        
+        assert(get_ip_reputation(ip) == 100); // Unknown IP → perfect reputation
+
         // Update reputation
         update_ip_reputation(ip, 30, THREAT_SQLI);
-        assert(get_ip_reputation(ip) == 30);
-        
+        assert(get_ip_reputation(ip) == 70); // 100 - 30
+
         update_ip_reputation(ip, 60, THREAT_CMDI);
-        assert(get_ip_reputation(ip) == 90); // 30 + 60
-        
-        // Decay reputation
+        assert(get_ip_reputation(ip) == 10); // 70 - 60
+
+        // Decay reputation (recovery)
         decay_reputation_scores(20);
-        assert(get_ip_reputation(ip) == 70); // 90 - 20
+        assert(get_ip_reputation(ip) == 30); // 10 + 20
         printf("  IP Reputation Tests: Passed\n");
     }
 }

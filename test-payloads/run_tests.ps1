@@ -79,5 +79,5 @@ Write-Host "`n===================================================" -ForegroundCo
 Write-Host "  Querying PostgreSQL Security Events Log  " -ForegroundColor Cyan
 Write-Host "===================================================" -ForegroundColor Cyan
 Start-Sleep -Seconds 2
-docker exec soc-postgres psql -U nullsploit -d nullsploit -c "SELECT id, encode(agent_uuid, 'hex') as agent, timestamp, threat_type, severity, src_ip, payload_preview FROM events ORDER BY timestamp DESC;"
+docker exec soc-postgres psql -U nullsploit -d nullsploit -c "SELECT id, agent_uuid as agent, timestamp, threat_type, severity, src_ip, payload_preview FROM events ORDER BY timestamp DESC;"
 

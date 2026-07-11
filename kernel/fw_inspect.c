@@ -85,11 +85,14 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
 extern int g_block_local_ips;
 
 static int is_local_ip(uint32_t ip) {
-    uint8_t *p = (uint8_t *)&ip;
-    if (p[0] == 127) return 1;
-    if (p[0] == 10) return 1;
-    if (p[0] == 172 && (p[1] >= 16 && p[1] <= 31)) return 1;
-    if (p[0] == 192 && p[1] == 168) return 1;
+    uint32_t host_ip = ntohl(ip);
+    uint8_t o1 = (host_ip >> 24) & 0xFF;
+    uint8_t o2 = (host_ip >> 16) & 0xFF;
+    
+    if (o1 == 127) return 1;
+    if (o1 == 10) return 1;
+    if (o1 == 172 && o2 >= 16 && o2 <= 31) return 1;
+    if (o1 == 192 && o2 == 168) return 1;
     return 0;
 }
 

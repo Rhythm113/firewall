@@ -12,18 +12,18 @@ Nullsploit is divided into three primary tiers:
 graph TD
     Client[Client Browser] -->|HTTP/HTTPS Port 80/443| AgentFW[C Firewall Daemon: fw_nfq]
     AgentFW -->|Local Unix Socket| Agent[C Agent: fw_agent]
-    Agent -->|PGP-Encrypted TCP Port 1113| Receiver[C Receiver Daemon: soc_receiver]
+    Agent -->|AES-Encrypted TCP Port 1113| Receiver[C Receiver Daemon: soc_receiver]
     Receiver -->|PostgreSQL Ingest| DB[(Postgres Database)]
     Spring[Spring Boot Console] -->|JDBC Query| DB
     ClientBrowser[Admin Dashboard] -->|HTTP API Port 8443| Spring
     Spring -->|Control Commands Port 8444| Receiver
-    Receiver -->|PGP-Encrypted Push| Agent
+    Receiver -->|AES-Encrypted Push| Agent
     Agent -->|Unix Socket Command| AgentFW
 ```
 
 1. **C Firewall Daemon (`fw_nfq`):** Runs at the kernel-user space boundary using `libnetfilter_queue`. Intercepts incoming network packets, evaluates them against rules (YARA, SQLi, Bot, Path Traversal), monitors connection states, and applies packet verdicts (`NF_ACCEPT` or `NF_DROP`).
-2. **C Agent (`fw_agent`):** Gathers local alerts from `fw_nfq` via UNIX domain sockets, encrypts them using PGP, and transmits them to the centralized SOC receiver. It also receives block/unblock control commands and config directives from the SOC receiver.
-3. **C Receiver Daemon (`soc_receiver`):** Receives PGP-encrypted alerts from agents, decrypts them, writes them to PostgreSQL, and listens for command connections on port 8444 from the Spring Boot API console to push policy changes back to agents.
+2. **C Agent (`fw_agent`):** Gathers local alerts from `fw_nfq` via UNIX domain sockets, encrypts them using AES, and transmits them to the centralized SOC receiver. It also receives block/unblock control commands and config directives from the SOC receiver.
+3. **C Receiver Daemon (`soc_receiver`):** Receives AES-encrypted alerts from agents, decrypts them, writes them to PostgreSQL, and listens for command connections on port 8444 from the Spring Boot API console to push policy changes back to agents.
 4. **Java Spring Boot Console:** Serves the frontend web dashboard, manages system state, runs the asynchronous background AI detection service, handles dataset downloads, and issues administrative API commands to the receiver daemon.
 
 ---
@@ -45,7 +45,7 @@ graph TD
    ```
 3. During startup:
    - The database service initializes the PostgreSQL instance and populates initial schemas.
-   - The `soc_receiver` daemon boots and initializes the PGP keys in `/etc/keys` for secure agent communications.
+   - The `soc_receiver` daemon boots and prepares for secure agent communications.
    - The Spring Boot dashboard console starts on port 8443.
    - Apache containers (`apache-server-1`, `apache-server-2`) compile `fw_nfq` and `fw_agent`, configure `iptables` queue hooks, and connect to the receiver daemon.
 4. Access the Enterprise Dashboard:
@@ -151,7 +151,7 @@ An asynchronous background thread (`AIService.java`) scans the database for new 
 
 ## 6. Security Considerations
 
-1. **Decoupled Control Planes:** The agent does not query the database. All blocks and configurations are pushed securely via the C receiver using PGP-encrypted sockets, preventing SQL injection or database access vector escalation from agent containers.
-2. **Channel Encryption:** The TCP stream between the agent (`fw_agent`) and the receiver (`soc_receiver`) is PGP-encrypted using RSA 2048-bit keys generated during container startup.
+1. **Decoupled Control Planes:** The agent does not query the database. All blocks and configurations are pushed securely via the C receiver using AES-encrypted sockets, preventing SQL injection or database access vector escalation from agent containers.
+2. **Channel Encryption:** The TCP stream between the agent (`fw_agent`) and the receiver (`soc_receiver`) is AES-encrypted in-memory using symmetric AES-256-CBC via OpenSSL libcrypto.
 3. **Session Token Validation:** The Spring Boot API console validates request authorization using cryptographically secure session tokens, preventing unauthenticated control command execution.
 4. **Input Sanitization:** URL pattern entries, YARA rules, and IP fields are sanitized and validated to prevent remote command execution (RCE) on firewall nodes.

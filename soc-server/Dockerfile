@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /usr/src/soc
 COPY Makefile ./
-COPY soc_receiver.c db.c db.h auth.c auth.h pgp_wrapper.c pgp_wrapper.h protocol.h fw_inspect.h threat_intel.c threat_intel.h ./
+COPY soc_receiver.c db.c db.h auth.c auth.h aes_wrapper.c aes_wrapper.h protocol.h fw_inspect.h threat_intel.c threat_intel.h ./
 
 # Compile receiver daemon
 RUN make

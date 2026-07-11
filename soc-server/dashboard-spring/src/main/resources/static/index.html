@@ -284,12 +284,14 @@
                 <button class="active" onclick="switchTab('overview')">Overview</button>
                 <button onclick="switchTab('events')">Security Events</button>
                 <button onclick="switchTab('agents')">WAF Nodes</button>
+                <button onclick="switchTab('agentlogs')">Agent Logs</button>
                 <button onclick="switchTab('yara')">YARA Catalog</button>
                 <button onclick="switchTab('reputation')">IP Reputation</button>
                 <button onclick="switchTab('blacklist')">IP Blacklist</button>
                 <button onclick="switchTab('configs')">Global Configs</button>
                 <button onclick="switchTab('settings')">Firewall Settings</button>
                 <button onclick="switchTab('dataset')">AI Dataset</button>
+                <button onclick="switchTab('health')">System Health</button>
                 <button onclick="logout()" style="color: #ef4444; margin-top: 24px;">Logout</button>
             </nav>
         </div>
@@ -524,10 +526,18 @@
                                 <tbody></tbody>
                             </table>
                         </div>
+                        <div style="display: flex; justify-content: center; align-items: center; gap: 16px; margin-top: 16px;">
+                            <button onclick="changeLocalRepPage(-1)" class="btn-primary" style="width: auto; padding: 6px 16px; background: transparent; border: 1px solid var(--border); color: #9ca3af;">← Prev</button>
+                            <span id="localrep-page-info" style="color: #9ca3af; font-size: 0.85rem;">Page 1</span>
+                            <button onclick="changeLocalRepPage(1)" class="btn-primary" style="width: auto; padding: 6px 16px; background: transparent; border: 1px solid var(--border); color: #9ca3af;">Next →</button>
+                        </div>
                     </div>
 
                     <div class="card">
-                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #34d399; margin-bottom: 16px;">External Threat Intelligence Lookup</h3>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                            <h3 style="margin: 0; font-size: 0.9rem; text-transform: uppercase; color: #34d399;">External Threat Intelligence Lookup</h3>
+                            <button onclick="fetchThreatIntelFromSources()" class="btn-primary" style="background: transparent; border: 1px solid #34d399; color: #34d399; width: auto; padding: 8px 16px;">Fetch From Sources Live</button>
+                        </div>
                         <div style="overflow-x: auto;">
                             <table id="external-reputation-table">
                                 <thead>
@@ -540,6 +550,11 @@
                                 </thead>
                                 <tbody></tbody>
                             </table>
+                        </div>
+                        <div style="display: flex; justify-content: center; align-items: center; gap: 16px; margin-top: 16px;">
+                            <button onclick="changeExtRepPage(-1)" class="btn-primary" style="width: auto; padding: 6px 16px; background: transparent; border: 1px solid var(--border); color: #9ca3af;">← Prev</button>
+                            <span id="extrep-page-info" style="color: #9ca3af; font-size: 0.85rem;">Page 1</span>
+                            <button onclick="changeExtRepPage(1)" class="btn-primary" style="width: auto; padding: 6px 16px; background: transparent; border: 1px solid var(--border); color: #9ca3af;">Next →</button>
                         </div>
                     </div>
                 </div>
@@ -687,11 +702,11 @@
                             </div>
                             <div class="form-group">
                                 <label>DeepSeek Model Name</label>
-                                <input type="text" id="settings-ai-model" placeholder="deepseek-v4-flash-free">
+                                <input type="text" id="settings-ai-model" placeholder="opencode/deepseek-v4-flash-free">
                             </div>
                             <div class="form-group">
                                 <label>OpenRouter API Endpoint URL</label>
-                                <input type="text" id="settings-ai-url" placeholder="https://openrouter.ai/api/v1/chat/completions">
+                                <input type="text" id="settings-ai-url" placeholder="https://opencode.ai/zen/v1/chat/completions">
                             </div>
                             <button type="submit" class="btn-primary" style="background: #34d399;">Save AI Settings</button>
                         </form>
@@ -704,8 +719,26 @@
                 <div class="card">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                         <h3 style="margin: 0; font-size: 0.9rem; text-transform: uppercase; color: var(--accent);">AI Analysis Threat Dataset</h3>
-                        <a href="/api/v2/dataset/download" target="_blank" class="btn-primary" style="background: #3b82f6; text-decoration: none; display: inline-block; text-align: center; padding: 8px 16px; border-radius: 6px; width: auto;">Download Dataset (CSV)</a>
+                        <a href="javascript:void(0)" onclick="downloadDatasetCsv()" class="btn-primary" style="background: #3b82f6; text-decoration: none; display: inline-block; text-align: center; padding: 8px 16px; border-radius: 6px; width: auto;">Download Dataset (CSV)</a>
                     </div>
+
+                    <!-- AI Analysis Progress & Status -->
+                    <div id="ai-analysis-progress" style="display: none; margin-bottom: 16px; padding: 12px; background: #1a1a2e; border: 1px solid var(--border); border-radius: 8px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <span style="font-size: 0.8rem; color: #9ca3af;">Analysis Progress</span>
+                            <span id="ai-status-label" style="font-size: 0.8rem; color: #f59e0b;">Loading...</span>
+                        </div>
+                        <div style="height: 8px; background: #16213e; border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
+                            <div id="ai-progress-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #3b82f6, #00d4ff); border-radius: 4px; transition: width 0.5s;"></div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: #6b7280;">
+                            <span>Analyzed: <strong id="ai-analyzed-count" style="color: #34d399;">0</strong></span>
+                            <span>Pending: <strong id="ai-pending-count" style="color: #f59e0b;">0</strong></span>
+                            <span>Total: <strong id="ai-total-events" style="color: #9ca3af;">0</strong></span>
+                            <span>Last Run: <span id="ai-last-run" style="color: #9ca3af;">--</span></span>
+                        </div>
+                    </div>
+
                     <div style="overflow-x: auto;">
                         <table id="dataset-table">
                             <thead>
@@ -722,6 +755,120 @@
                             </thead>
                             <tbody></tbody>
                         </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SYSTEM HEALTH TAB -->
+            <div id="tab-health" class="tab-content" style="display: none;">
+                <!-- CPU & Memory Gauges -->
+                <div class="grid-3" style="margin-bottom: 24px;">
+                    <div class="card" style="text-align: center;">
+                        <div style="font-size: 0.75rem; color: #9ca3af; text-transform: uppercase;">CPU Load</div>
+                        <div id="health-cpu-gauge" style="font-size: 2.25rem; font-weight: bold; margin-top: 8px; color: var(--accent);">--</div>
+                        <div style="font-size: 0.75rem; color: #6b7280; margin-top: 4px;">Process CPU %</div>
+                    </div>
+                    <div class="card" style="text-align: center;">
+                        <div style="font-size: 0.75rem; color: #9ca3af; text-transform: uppercase;">Memory Usage</div>
+                        <div id="health-mem-gauge" style="font-size: 2.25rem; font-weight: bold; margin-top: 8px; color: #34d399;">--</div>
+                        <div style="font-size: 0.75rem; color: #6b7280; margin-top: 4px;">JVM Heap Used</div>
+                    </div>
+                    <div class="card" style="text-align: center;">
+                        <div style="font-size: 0.75rem; color: #9ca3af; text-transform: uppercase;">Event Throughput</div>
+                        <div id="health-event-rate" style="font-size: 2.25rem; font-weight: bold; margin-top: 8px; color: #f87171;">--</div>
+                        <div style="font-size: 0.75rem; color: #6b7280; margin-top: 4px;">Events/sec (last 60s)</div>
+                    </div>
+                </div>
+
+                <!-- Spike Alert Banner -->
+                <div id="health-spike-banner" style="display: none; margin-bottom: 24px;">
+                    <div class="card" id="health-spike-inner" style="border-color: #ef4444; border-width: 2px; padding: 16px;">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 1.5rem;">&#9888;</span>
+                            <div>
+                                <strong id="health-spike-title" style="color: #ef4444; font-size: 1rem;">TRAFFIC SPIKE DETECTED</strong>
+                                <div id="health-spike-message" style="color: #fca5a5; font-size: 0.85rem; margin-top: 4px;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid-3">
+                    <!-- CPU Detail -->
+                    <div class="card">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">CPU Details</h3>
+                        <table style="width: 100%;">
+                            <tr><td style="color: #9ca3af;">Process CPU</td><td style="text-align: right; font-family: monospace;" id="health-cpu-process">--</td></tr>
+                            <tr><td style="color: #9ca3af;">Load Average</td><td style="text-align: right; font-family: monospace;" id="health-cpu-loadavg">--</td></tr>
+                            <tr><td style="color: #9ca3af;">Cores</td><td style="text-align: right; font-family: monospace;" id="health-cpu-cores">--</td></tr>
+                        </table>
+                    </div>
+
+                    <!-- Memory Detail -->
+                    <div class="card">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Memory Details</h3>
+                        <table style="width: 100%;">
+                            <tr><td style="color: #9ca3af;">Used</td><td style="text-align: right; font-family: monospace;" id="health-mem-used">--</td></tr>
+                            <tr><td style="color: #9ca3af;">Free</td><td style="text-align: right; font-family: monospace;" id="health-mem-free">--</td></tr>
+                            <tr><td style="color: #9ca3af;">Max</td><td style="text-align: right; font-family: monospace;" id="health-mem-max">--</td></tr>
+                            <tr><td style="color: #9ca3af;">Threads</td><td style="text-align: right; font-family: monospace;" id="health-threads">--</td></tr>
+                        </table>
+                    </div>
+
+                    <!-- Event Throughput Timeline -->
+                    <div class="card">
+                        <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Event Throughput</h3>
+                        <table style="width: 100%;">
+                            <tr><td style="color: #9ca3af;">Last 60s</td><td style="text-align: right; font-family: monospace;" id="health-rt-60s">--</td></tr>
+                            <tr><td style="color: #9ca3af;">Last 5 min</td><td style="text-align: right; font-family: monospace;" id="health-rt-5min">--</td></tr>
+                            <tr><td style="color: #9ca3af;">Last 1 hour</td><td style="text-align: right; font-family: monospace;" id="health-rt-1h">--</td></tr>
+                            <tr><td style="color: #9ca3af;">Uptime</td><td style="text-align: right; font-family: monospace;" id="health-uptime">--</td></tr>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Throughput Sparkline -->
+                <div class="card">
+                    <h3 style="margin-top: 0; font-size: 0.9rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 16px;">Event Throughput (Last 10 min per-minute counts)</h3>
+                    <canvas id="health-timeline-canvas" class="timeline-canvas" width="800" height="180"></canvas>
+                </div>
+            </div>
+
+            <!-- AGENT LOGS TAB -->
+            <div id="tab-agentlogs" class="tab-content" style="display: none;">
+                <div style="display: flex; flex-direction: column; gap: 24px;">
+                    <div class="card">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+                            <h3 style="margin: 0; font-size: 0.9rem; text-transform: uppercase; color: var(--accent);">Agent Activity Logs</h3>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <input type="text" id="agentlog-search" placeholder="Search IP, type, or message..."
+                                       style="background: #080d1a; border: 1px solid var(--border); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.8rem; outline: none; width: 250px;"
+                                       onkeydown="if(event.key==='Enter') loadAgentLogs()">
+                                <button onclick="loadAgentLogs()" class="btn-primary" style="width: auto; padding: 6px 16px;">Search</button>
+                                <button onclick="document.getElementById('agentlog-search').value=''; loadAgentLogs();" style="background: transparent; border: 1px solid var(--border); color: #9ca3af; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem;">Clear</button>
+                            </div>
+                        </div>
+                        <div style="overflow-x: auto;">
+                            <table id="agent-logs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Timestamp</th>
+                                        <th>Agent UUID</th>
+                                        <th>Source IP</th>
+                                        <th>Type</th>
+                                        <th>Message</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="5" style="text-align: center; color: #9ca3af; padding: 16px;">No logs loaded.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div style="display: flex; justify-content: center; align-items: center; gap: 16px; margin-top: 16px;">
+                            <button onclick="changeAgentLogPage(-1)" class="btn-primary" style="width: auto; padding: 6px 16px;">&larr; Previous</button>
+                            <span id="agentlog-page-info" style="color: #9ca3af; font-size: 0.8rem;">Page 1</span>
+                            <button onclick="changeAgentLogPage(1)" class="btn-primary" style="width: auto; padding: 6px 16px;">Next &rarr;</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -762,10 +909,31 @@
         function switchTab(tabId) {
             document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
             document.querySelectorAll('nav button').forEach(el => el.classList.remove('active'));
-            
+
             document.getElementById('tab-' + tabId).style.display = 'block';
             document.getElementById('tab-title').innerText = tabId;
-            
+
+            // Load health data on demand when the tab is selected
+            if (tabId === 'health') {
+                loadHealthStats();
+            }
+
+            if (tabId === 'agentlogs') {
+                agentlogCurrentPage = 1;
+                loadAgentLogs();
+            }
+
+            if (tabId === 'reputation') {
+                localRepCurrentPage = 1;
+                extRepCurrentPage = 1;
+                loadLocalReputation();
+                loadExternalReputation();
+            }
+
+            if (tabId === 'dataset') {
+                loadAIStatus();
+            }
+
             const btn = Array.from(document.querySelectorAll('nav button')).find(b => b.innerText.toLowerCase().includes(tabId.substring(0,4)));
             if (btn) btn.classList.add('active');
 
@@ -786,7 +954,7 @@
                 10: 'Remote File Inclusion',
                 11: 'Bot / Automated Scanner',
                 12: 'YARA Signature Trigger',
-                13: 'High Malice IP Reputation'
+                13: 'Low Reputation IP Blocked'
             };
             return map[type] || `Unknown (${type})`;
         }
@@ -799,6 +967,14 @@
 
         let logCurrentPage = 1;
         const logPageLimit = 50;
+        let agentlogCurrentPage = 1;
+        const agentlogPageLimit = 50;
+        let extRepCurrentPage = 1;
+        const extRepPageLimit = 50;
+        let extRepTotal = 0;
+        let localRepCurrentPage = 1;
+        const localRepPageLimit = 50;
+        let localRepTotal = 0;
         let debounceTimer;
 
         function debounceLogFilter() {
@@ -874,6 +1050,194 @@
                 }
             } catch (err) {
                 console.error("Error loading events", err);
+            }
+        }
+
+        async function loadAgentLogs() {
+            try {
+                const search = document.getElementById('agentlog-search').value;
+                let url = `${API_BASE}/agent-logs?limit=${agentlogPageLimit}&offset=${(agentlogCurrentPage - 1) * agentlogPageLimit}`;
+                if (search && search.trim() !== '') {
+                    url += `&search=${encodeURIComponent(search.trim())}`;
+                }
+                const res = await authFetch(url);
+                if (res.ok) {
+                    const logs = await res.json();
+                    const body = document.querySelector('#agent-logs-table tbody');
+                    if (logs.length === 0) {
+                        body.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #9ca3af; padding: 16px;">No agent logs found.</td></tr>`;
+                    } else {
+                        body.innerHTML = logs.map(l => `
+                            <tr>
+                                <td style="white-space: nowrap; color: #9ca3af;">${l.created_at}</td>
+                                <td style="font-family: monospace; font-size: 0.75rem;">${l.agent_uuid ? l.agent_uuid.substring(0,16)+'...' : 'N/A'}</td>
+                                <td style="color: ${l.log_type === 'error' ? '#ef4444' : l.log_type === 'heartbeat' ? '#34d399' : '#f59e0b'};">${l.src_ip}</td>
+                                <td><span class="badge ${l.log_type === 'error' ? 'badge-critical' : l.log_type === 'connect' || l.log_type === 'disconnect' ? 'badge-warning' : l.log_type === 'heartbeat' ? 'badge-info' : 'badge-info'}">${l.log_type}</span></td>
+                                <td style="max-width: 400px; word-break: break-all;">${l.message}</td>
+                            </tr>
+                        `).join('');
+                    }
+                    document.getElementById('agentlog-page-info').innerText = `Page ${agentlogCurrentPage}`;
+                }
+            } catch (err) {
+                console.error("Error loading agent logs", err);
+            }
+        }
+
+        function changeAgentLogPage(dir) {
+            if (dir === -1 && agentlogCurrentPage <= 1) return;
+            agentlogCurrentPage += dir;
+            loadAgentLogs();
+        }
+
+        async function loadLocalReputation() {
+            try {
+                const offset = (localRepCurrentPage - 1) * localRepPageLimit;
+                const url = `${API_BASE}/reputation?type=local&limit=${localRepPageLimit}&offset=${offset}`;
+                const localRepRes = await authFetch(url);
+                if (localRepRes.ok) {
+                    const localRep = await localRepRes.json();
+                    const localRepBody = document.querySelector('#local-reputation-table tbody');
+                    if (localRep.length === 0) {
+                        localRepBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #9ca3af; padding: 16px;">No WAF local node reputation matrix alerts loaded.</td></tr>`;
+                    } else {
+                        localRepBody.innerHTML = localRep.map(r => `
+                            <tr>
+                                <td><strong>${r.ip}</strong></td>
+                                <td><span class="badge ${r.local_score <= 20 ? 'badge-critical' : r.local_score <= 60 ? 'badge-warning' : 'badge-info'}">${r.local_score} / 100</span></td>
+                                <td>${r.attack_types || 'None'}</td>
+                                <td>${r.updated_at}</td>
+                                <td><button onclick="clearReputation('${r.ip}')" style="background: transparent; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem;">CLEAR</button></td>
+                            </tr>
+                        `).join('');
+                    }
+                    // Fetch total count for page info
+                    try {
+                        const countRes = await authFetch(`${API_BASE}/reputation/count?type=local`);
+                        if (countRes.ok) {
+                            const countData = await countRes.json();
+                            localRepTotal = countData.count;
+                            const totalPages = Math.max(1, Math.ceil(localRepTotal / localRepPageLimit));
+                            document.getElementById('localrep-page-info').innerText = `Page ${localRepCurrentPage} of ${totalPages}`;
+                        }
+                    } catch (e) {
+                        document.getElementById('localrep-page-info').innerText = `Page ${localRepCurrentPage}`;
+                    }
+                }
+            } catch (err) {
+                console.error("Error loading local reputation", err);
+            }
+        }
+
+        function changeLocalRepPage(dir) {
+            if (dir === -1 && localRepCurrentPage <= 1) return;
+            const totalPages = Math.max(1, Math.ceil(localRepTotal / localRepPageLimit));
+            if (dir === 1 && localRepCurrentPage >= totalPages) return;
+            localRepCurrentPage += dir;
+            loadLocalReputation();
+        }
+
+        async function loadExternalReputation() {
+            try {
+                const offset = (extRepCurrentPage - 1) * extRepPageLimit;
+                const url = `${API_BASE}/reputation?type=external&limit=${extRepPageLimit}&offset=${offset}`;
+                const extRepRes = await authFetch(url);
+                if (extRepRes.ok) {
+                    const extRep = await extRepRes.json();
+                    extRepTotal = extRep.length;
+
+                    const extRepBody = document.querySelector('#external-reputation-table tbody');
+                    if (extRep.length === 0) {
+                        extRepBody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #9ca3af; padding: 16px;">No external threat intel feed data loaded.</td></tr>`;
+                    } else {
+                        extRepBody.innerHTML = extRep.map(r => `
+                            <tr>
+                                <td><strong>${r.ip}</strong></td>
+                                <td><span class="badge ${r.external_score <= 20 ? 'badge-critical' : r.external_score <= 60 ? 'badge-warning' : 'badge-info'}">${r.external_score} / 100</span></td>
+                                <td>${r.attack_types || 'None'}</td>
+                                <td>${r.updated_at}</td>
+                            </tr>
+                        `).join('');
+                    }
+                    // Fetch total count for page info
+                    try {
+                        const countRes = await authFetch(`${API_BASE}/reputation/count?type=external`);
+                        if (countRes.ok) {
+                            const countData = await countRes.json();
+                            const totalExtPages = Math.max(1, Math.ceil(countData.count / extRepPageLimit));
+                            document.getElementById('extrep-page-info').innerText = `Page ${extRepCurrentPage} of ${totalExtPages}`;
+                        }
+                    } catch (e) {
+                        document.getElementById('extrep-page-info').innerText = `Page ${extRepCurrentPage}`;
+                    }
+                }
+            } catch (err) {
+                console.error("Error loading external reputation", err);
+            }
+        }
+
+        function changeExtRepPage(dir) {
+            if (dir === -1 && extRepCurrentPage <= 1) return;
+            extRepCurrentPage += dir;
+            loadExternalReputation();
+        }
+
+        async function fetchThreatIntelFromSources() {
+            try {
+                const btn = document.querySelector('button[onclick*="fetchThreatIntelFromSources"]');
+                if (btn) { btn.disabled = true; btn.innerText = 'Fetching...'; }
+                const res = await authFetch(`${API_BASE}/threat-intel/fetch`, { method: 'POST' });
+                if (res.ok) {
+                    await new Promise(r => setTimeout(r, 3000));
+                    extRepCurrentPage = 1;
+                    await loadExternalReputation();
+                    showStatus('Threat intel fetch completed.');
+                } else {
+                    showStatus('Failed to trigger threat intel fetch.', 'error');
+                }
+            } catch (err) {
+                console.error("Error fetching threat intel", err);
+                showStatus('Error fetching threat intel.', 'error');
+            } finally {
+                const btn = document.querySelector('button[onclick*="fetchThreatIntelFromSources"]');
+                if (btn) { btn.disabled = false; btn.innerText = 'Fetch From Sources Live'; }
+            }
+        }
+
+        async function loadAIStatus() {
+            try {
+                const res = await authFetch(`${API_BASE}/ai/status`);
+                if (res.ok) {
+                    const s = await res.json();
+                    const progressDiv = document.getElementById('ai-analysis-progress');
+                    if (progressDiv) progressDiv.style.display = 'block';
+
+                    document.getElementById('ai-total-events').innerText = s.total_events || 0;
+                    document.getElementById('ai-analyzed-count').innerText = s.analyzed_events || 0;
+                    document.getElementById('ai-pending-count').innerText = s.pending_events || 0;
+                    document.getElementById('ai-last-run').innerText = s.last_run || '--';
+
+                    const statusLabel = document.getElementById('ai-status-label');
+                    if (statusLabel) {
+                        const st = (s.status || 'idle').toLowerCase();
+                        if (st.includes('running')) {
+                            statusLabel.innerHTML = '<span style="color: #f59e0b;">&#9679; Analyzing... (' + s.pending_events + ' pending)</span>';
+                        } else if (st.includes('error')) {
+                            statusLabel.innerHTML = '<span style="color: #ef4444;">&#9679; Error</span>';
+                        } else if (st.includes('idle')) {
+                            statusLabel.innerHTML = '<span style="color: #34d399;">&#9679; Idle</span>';
+                        } else {
+                            statusLabel.innerHTML = '<span style="color: #9ca3af;">&#9679; ' + (s.status || 'idle') + '</span>';
+                        }
+                    }
+
+                    const bar = document.getElementById('ai-progress-bar');
+                    if (bar) {
+                        bar.style.width = (s.progress_percent || 0) + '%';
+                    }
+                }
+            } catch (err) {
+                console.error("Error loading AI status", err);
             }
         }
 
@@ -998,45 +1362,10 @@
                 }
 
                 // 4. Local Reputation
-                const localRepRes = await authFetch(`${API_BASE}/reputation?type=local`);
-                if (localRepRes.ok) {
-                    const localRep = await localRepRes.json();
-                    const localRepBody = document.querySelector('#local-reputation-table tbody');
-                    if (localRep.length === 0) {
-                        localRepBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #9ca3af; padding: 16px;">No WAF local node reputation matrix alerts loaded.</td></tr>`;
-                    } else {
-                        localRepBody.innerHTML = localRep.map(r => `
-                            <tr>
-                                <td><strong>${r.ip}</strong></td>
-                                <td><span class="badge ${r.local_score >= 80 ? 'badge-critical' : r.local_score >= 40 ? 'badge-warning' : 'badge-info'}">${r.local_score} / 100</span></td>
-                                <td>${r.attack_types || 'None'}</td>
-                                <td>${r.updated_at}</td>
-                                <td><button onclick="clearReputation('${r.ip}')" style="background: transparent; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem;">CLEAR</button></td>
-                            </tr>
-                        `).join('');
-                    }
-                }
+                await loadLocalReputation();
 
                 // 4b. External Reputation
-                const extRepRes = await authFetch(`${API_BASE}/reputation?type=external`);
-                if (extRepRes.ok) {
-                    const extRep = await extRepRes.json();
-                    document.getElementById('stat-indicators').innerText = extRep.filter(r => r.external_score >= 80).length;
-                    
-                    const extRepBody = document.querySelector('#external-reputation-table tbody');
-                    if (extRep.length === 0) {
-                        extRepBody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #9ca3af; padding: 16px;">No external threat intel feed data loaded.</td></tr>`;
-                    } else {
-                        extRepBody.innerHTML = extRep.map(r => `
-                            <tr>
-                                <td><strong>${r.ip}</strong></td>
-                                <td><span class="badge ${r.external_score >= 80 ? 'badge-critical' : r.external_score >= 40 ? 'badge-warning' : 'badge-info'}">${r.external_score} / 100</span></td>
-                                <td>${r.attack_types || 'None'}</td>
-                                <td>${r.updated_at}</td>
-                            </tr>
-                        `).join('');
-                    }
-                }
+                await loadExternalReputation();
 
                 // 5. Yara Rules
                 const yaraRes = await authFetch(`${API_BASE}/yara/rules`);
@@ -1124,10 +1453,13 @@
 
                         if (c.key === 'block_local_ips') document.getElementById('settings-block-local').checked = (parsedVal === 'true' || parsedVal === true || parsedVal === '1' || parsedVal === 1);
                         if (c.key === 'opencode_api_key') document.getElementById('settings-ai-key').value = parsedVal || "";
-                        if (c.key === 'opencode_model') document.getElementById('settings-ai-model').value = parsedVal || "deepseek-v4-flash-free";
-                        if (c.key === 'opencode_url') document.getElementById('settings-ai-url').value = parsedVal || "https://openrouter.ai/api/v1/chat/completions";
+                        if (c.key === 'opencode_model') document.getElementById('settings-ai-model').value = parsedVal || "opencode/deepseek-v4-flash-free";
+                        if (c.key === 'opencode_url') document.getElementById('settings-ai-url').value = parsedVal || "https://opencode.ai/zen/v1/chat/completions";
                     });
                 }
+
+                // Load AI Analysis Status & Progress
+                await loadAIStatus();
 
                 // Load AI Dataset
                 const datasetRes = await authFetch(`${API_BASE}/dataset`);
@@ -1188,7 +1520,13 @@
             ctx.clearRect(0, 0, w, h);
 
             const points = window.timelineData || [];
-            if (points.length < 2) return;
+            if (points.length < 2) {
+                ctx.fillStyle = '#4b5563';
+                ctx.font = '14px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('No threat activity data available', w / 2, h / 2);
+                return;
+            }
 
             const maxVal = Math.max(...points.map(p => p.count), 5);
             const step = w / (points.length - 1);
@@ -1206,7 +1544,8 @@
             ctx.stroke();
 
             // Fill area
-            ctx.lineTo(w, h);
+            const lastX = (points.length - 1) * step;
+            ctx.lineTo(lastX, h);
             ctx.lineTo(0, h);
             ctx.closePath();
             const grad = ctx.createLinearGradient(0, 0, 0, h);
@@ -1215,6 +1554,144 @@
             ctx.fillStyle = grad;
             ctx.fill();
         }
+
+        // --- System Health Monitoring ---
+        function formatBytes(bytes) {
+            if (!bytes || bytes === 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(1024));
+            return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
+        }
+
+        function formatUptime(seconds) {
+            if (!seconds) return '--';
+            const d = Math.floor(seconds / 86400);
+            const h = Math.floor((seconds % 86400) / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = seconds % 60;
+            let str = '';
+            if (d > 0) str += d + 'd ';
+            if (h > 0) str += h + 'h ';
+            if (m > 0) str += m + 'm ';
+            str += s + 's';
+            return str;
+        }
+
+        function drawHealthTimeline(points) {
+            const canvas = document.getElementById('health-timeline-canvas');
+            if (!canvas || !points || points.length < 2) return;
+            const ctx = canvas.getContext('2d');
+            const w = canvas.width;
+            const h = canvas.height;
+            ctx.clearRect(0, 0, w, h);
+
+            const maxVal = Math.max(...points.map(p => p.count), 5);
+            const step = w / (points.length - 1);
+
+            ctx.beginPath();
+            ctx.strokeStyle = '#f87171';
+            ctx.lineWidth = 2;
+
+            points.forEach((p, idx) => {
+                const x = idx * step;
+                const y = h - (p.count / maxVal * (h - 40)) - 20;
+                if (idx === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+
+            ctx.lineTo(w, h);
+            ctx.lineTo(0, h);
+            ctx.closePath();
+            const grad = ctx.createLinearGradient(0, 0, 0, h);
+            grad.addColorStop(0, 'rgba(248, 113, 113, 0.15)');
+            grad.addColorStop(1, 'rgba(248, 113, 113, 0)');
+            ctx.fillStyle = grad;
+            ctx.fill();
+        }
+
+        async function loadHealthStats() {
+            try {
+                const res = await authFetch(`${API_BASE}/monitor/health`);
+                if (!res.ok) return;
+                const data = await res.json();
+
+                // --- CPU ---
+                if (data.cpu) {
+                    const cpuPct = data.cpu.process_cpu_percent;
+                    const cpuGauge = document.getElementById('health-cpu-gauge');
+                    if (cpuPct !== null && cpuPct !== undefined) {
+                        cpuGauge.innerText = cpuPct.toFixed(1) + '%';
+                        cpuGauge.style.color = cpuPct > 80 ? '#ef4444' : cpuPct > 50 ? '#f59e0b' : 'var(--accent)';
+                    } else {
+                        cpuGauge.innerText = 'N/A';
+                    }
+                    document.getElementById('health-cpu-process').innerText = cpuPct !== null ? cpuPct.toFixed(1) + '%' : 'N/A';
+                    document.getElementById('health-cpu-loadavg').innerText = data.cpu.system_load_average !== null ? data.cpu.system_load_average.toFixed(2) : 'N/A';
+                    document.getElementById('health-cpu-cores').innerText = data.cpu.available_processors || '--';
+                }
+
+                // --- Memory ---
+                if (data.memory) {
+                    const memPct = data.memory.used_percent;
+                    const memGauge = document.getElementById('health-mem-gauge');
+                    memGauge.innerText = memPct + '%';
+                    memGauge.style.color = memPct > 80 ? '#ef4444' : memPct > 50 ? '#f59e0b' : '#34d399';
+                    document.getElementById('health-mem-used').innerText = formatBytes(data.memory.used_bytes);
+                    document.getElementById('health-mem-free').innerText = formatBytes(data.memory.free_bytes);
+                    document.getElementById('health-mem-max').innerText = formatBytes(data.memory.max_bytes);
+                }
+
+                // --- Threads ---
+                if (data.threads) {
+                    document.getElementById('health-threads').innerText = data.threads.current + ' (' + data.threads.peak + ' peak)';
+                }
+
+                // --- Event Throughput ---
+                if (data.event_throughput) {
+                    const rt = data.event_throughput;
+                    document.getElementById('health-event-rate').innerText = rt.rate_per_sec;
+                    const eventColor = rt.rate_per_sec > 5 ? '#ef4444' : rt.rate_per_sec > 1 ? '#f59e0b' : '#34d399';
+                    document.getElementById('health-event-rate').style.color = eventColor;
+                    document.getElementById('health-rt-60s').innerText = rt.last_60s;
+                    document.getElementById('health-rt-5min').innerText = rt.last_5min;
+                    document.getElementById('health-rt-1h').innerText = rt.last_1h;
+
+                    if (rt.timeline) {
+                        drawHealthTimeline(rt.timeline);
+                    }
+                }
+
+                // --- Uptime ---
+                document.getElementById('health-uptime').innerText = formatUptime(data.uptime_seconds);
+
+                // --- Spike Alert ---
+                const spikeBanner = document.getElementById('health-spike-banner');
+                const spikeInner = document.getElementById('health-spike-inner');
+                const spikeTitle = document.getElementById('health-spike-title');
+                const spikeMsg = document.getElementById('health-spike-message');
+                if (data.spike_alert && data.spike_alert.active) {
+                    spikeBanner.style.display = 'block';
+                    const severity = data.spike_alert.severity === 'CRITICAL' ? '#ef4444' : '#f59e0b';
+                    spikeInner.style.borderColor = severity;
+                    spikeTitle.style.color = severity;
+                    spikeTitle.innerText = data.spike_alert.severity + ' TRAFFIC SPIKE DETECTED';
+                    spikeMsg.innerText = data.spike_alert.message;
+                } else {
+                    spikeBanner.style.display = 'none';
+                }
+
+            } catch (err) {
+                console.error("Health stats error", err);
+            }
+        }
+
+        // System Health tab interval (every 10 seconds)
+        setInterval(() => {
+            if (document.getElementById('tab-health').style.display !== 'none' && sessionStorage.getItem('session_token')) {
+                loadHealthStats();
+            }
+        }, 10000);
 
         // Submissions
         document.getElementById('block-agent-form').addEventListener('submit', async (e) => {
@@ -1404,8 +1881,8 @@
         document.getElementById('settings-ai-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const key = document.getElementById('settings-ai-key').value;
-            const model = document.getElementById('settings-ai-model').value || 'deepseek-v4-flash-free';
-            const url = document.getElementById('settings-ai-url').value || 'https://openrouter.ai/api/v1/chat/completions';
+            const model = document.getElementById('settings-ai-model').value || 'opencode/deepseek-v4-flash-free';
+            const url = document.getElementById('settings-ai-url').value || 'https://opencode.ai/zen/v1/chat/completions';
             
             const cfgs = [
                 { key: 'opencode_api_key', value: JSON.stringify({ value: key }), category: 'ai' },
@@ -1428,11 +1905,47 @@
             }
         });
 
+        // Authenticated CSV download for AI dataset (replaces direct <a> link that fails auth)
+        async function downloadDatasetCsv() {
+            try {
+                const res = await authFetch(`${API_BASE}/dataset/download`);
+                if (!res.ok) {
+                    showStatus('Failed to download dataset: ' + res.status, 'error');
+                    return;
+                }
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'ai_threat_dataset.csv';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (err) {
+                showStatus('Download failed: ' + err.message, 'error');
+            }
+        }
+
         let sseSource = null;
+        let sseReconnectDelay = 1000;
+        let sseOverviewTimer = null;
+
+        // Immediately refresh overview stats when an SSE event lands, debounced
+        function refreshOverviewOnEvent() {
+            if (sseOverviewTimer) clearTimeout(sseOverviewTimer);
+            sseOverviewTimer = setTimeout(() => {
+                sseOverviewTimer = null;
+                loadDashboardStats();
+            }, 300);
+        }
+
         function setupSSE() {
             if (sseSource) sseSource.close();
             const token = sessionStorage.getItem('session_token');
+            if (!token) return;
             sseSource = new EventSource(`${API_BASE}/events/live?token=${encodeURIComponent(token)}`);
+            sseSource.onopen = () => { sseReconnectDelay = 1000; };
             sseSource.onmessage = (event) => {
                 try {
                     const evt = JSON.parse(event.data);
@@ -1481,14 +1994,18 @@
                             }
                         }
                     }
+
+                    // Immediately refresh overview stats (timeline, threat breakdown)
+                    refreshOverviewOnEvent();
                 } catch (err) {
                     console.error("SSE parse error", err);
                 }
             };
             sseSource.onerror = (err) => {
-                console.warn("SSE connection lost. Reconnecting in 5s...", err);
+                console.warn(`SSE connection lost. Reconnecting in ${sseReconnectDelay/1000}s...`, err);
                 sseSource.close();
-                setTimeout(setupSSE, 5000);
+                setTimeout(setupSSE, sseReconnectDelay);
+                sseReconnectDelay = Math.min(sseReconnectDelay * 2, 30000);
             };
         }
 
@@ -1551,11 +2068,18 @@
         if (sessionStorage.getItem('session_token')) {
             fetchData();
         }
+        // Fast poll (every 10s) — lightweight stats refresh
+        setInterval(() => {
+            if (sessionStorage.getItem('session_token')) {
+                loadDashboardStats();
+            }
+        }, 10000);
+        // Slow poll (every 30s) — full data refresh
         setInterval(() => {
             if (sessionStorage.getItem('session_token')) {
                 fetchData();
             }
-        }, 5000);
+        }, 30000);
     </script>
 </body>
 </html>

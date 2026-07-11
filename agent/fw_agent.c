@@ -14,15 +14,16 @@
 #include <sys/types.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <linux/netlink.h>
 #include "protocol.h"
-#include "pgp_wrapper.h"
+#include "aes_wrapper.h"
 
 #define UUID_PATH "/etc/fw_keys/agent_uuid"
 #define BLOCKLIST_PATH "/etc/fw_inspect/blocklist.txt"
 #define UNIX_SOCK_PATH "/var/run/fw_inspect.sock"
-#define EVENT_BUFFER_SIZE 256
+#define EVENT_BUFFER_SIZE 512
 
 // Global State
 static uint8_t agent_uuid[16];
@@ -36,6 +37,23 @@ static volatile sig_atomic_t reload_requested = 0;
 // Signal handler for SIGHUP (reload blocklist)
 static void handle_sighup(int sig) {
     reload_requested = 1;
+}
+
+// Read exactly len bytes from fd
+static int read_exact(int fd, void *buf, size_t len) {
+    char *ptr = (char *)buf;
+    size_t total_read = 0;
+    while (total_read < len) {
+        ssize_t r = read(fd, ptr + total_read, len - total_read);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        } else if (r == 0) {
+            return 0; // EOF
+        }
+        total_read += r;
+    }
+    return (int)total_read;
 }
 
 // Generate random UUID
@@ -276,6 +294,17 @@ static int connect_to_soc(void) {
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
+    // Aggressive TCP keepalive: detect dead connections within ~14 seconds
+    // (5s idle + 3 probes x 3s interval) instead of the default 2+ hours
+    int keepalive = 1;
+    setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
+    int keepidle = 5;
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &keepidle, sizeof(keepidle));
+    int keepintvl = 3;
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
+    int keepcnt = 3;
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &keepcnt, sizeof(keepcnt));
+
     if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
         perror("[agent] Connect to SOC failed");
         close(fd);
@@ -293,6 +322,7 @@ static int connect_to_soc(void) {
 static int send_to_soc(uint8_t msg_type, const void *payload_data, size_t payload_len) {
     if (soc_fd < 0) {
         if (connect_to_soc() < 0) {
+            fprintf(stderr, "[agent] send_to_soc: SOC server unreachable (will retry on next flush/event)\n");
             return -1;
         }
     }
@@ -301,8 +331,8 @@ static int send_to_soc(uint8_t msg_type, const void *payload_data, size_t payloa
     size_t encrypted_len = 0;
 
     if (payload_len > 0) {
-        if (pgp_encrypt(payload_data, payload_len, &encrypted_payload, &encrypted_len) < 0) {
-            fprintf(stderr, "[agent] Failed to encrypt payload with PGP\n");
+        if (aes_encrypt(payload_data, payload_len, &encrypted_payload, &encrypted_len) < 0) {
+            fprintf(stderr, "[agent] Failed to encrypt payload with AES\n");
             return -1;
         }
     }
@@ -324,13 +354,13 @@ static int send_to_soc(uint8_t msg_type, const void *payload_data, size_t payloa
         return -1;
     }
 
-    // Send PGP Encrypted payload
+    // Send AES Encrypted payload
     if (encrypted_len > 0 && encrypted_payload) {
         size_t total_sent = 0;
         while (total_sent < encrypted_len) {
             ssize_t bytes_sent = write(soc_fd, encrypted_payload + total_sent, encrypted_len - total_sent);
             if (bytes_sent < 0) {
-                perror("[agent] Failed to write PGP payload to SOC");
+                perror("[agent] Failed to write AES payload to SOC");
                 free(encrypted_payload);
                 close(soc_fd);
                 soc_fd = -1;
@@ -345,6 +375,36 @@ static int send_to_soc(uint8_t msg_type, const void *payload_data, size_t payloa
     return 0;
 }
 
+#define DEDUPLICATION_CACHE_SIZE 32
+#define DEDUPLICATION_WINDOW_SECS 10
+
+struct dedup_entry {
+    uint32_t src_ip;
+    uint8_t threat_type;
+    uint64_t last_sent_time;
+};
+
+static struct dedup_entry dedup_cache[DEDUPLICATION_CACHE_SIZE];
+static int dedup_cache_next = 0;
+
+static int is_duplicate_alert(const struct fw_event *event) {
+    uint64_t now = event->timestamp;
+    for (int i = 0; i < DEDUPLICATION_CACHE_SIZE; i++) {
+        if (dedup_cache[i].src_ip == event->src_ip &&
+            dedup_cache[i].threat_type == event->threat_type &&
+            now >= dedup_cache[i].last_sent_time &&
+            (now - dedup_cache[i].last_sent_time) < DEDUPLICATION_WINDOW_SECS) {
+            return 1;
+        }
+    }
+    // Update cache
+    dedup_cache[dedup_cache_next].src_ip = event->src_ip;
+    dedup_cache[dedup_cache_next].threat_type = event->threat_type;
+    dedup_cache[dedup_cache_next].last_sent_time = now;
+    dedup_cache_next = (dedup_cache_next + 1) % DEDUPLICATION_CACHE_SIZE;
+    return 0;
+}
+
 // Main execution loop
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -356,6 +416,10 @@ int main(int argc, char **argv) {
 
     load_agent_uuid();
     signal(SIGHUP, handle_sighup);
+    // Ignore SIGPIPE — prevents write() to a half-closed SOC socket from
+    // silently killing the agent. Errors are caught by the return value check
+    // in send_to_soc() and handled via reconnection.
+    signal(SIGPIPE, SIG_IGN);
 
     connect_to_firewall();
     connect_to_soc();
@@ -367,7 +431,7 @@ int main(int argc, char **argv) {
     load_and_push_blocklist();
 
     time_t last_flush = time(NULL);
-    const int flush_interval = 300;
+    const int flush_interval = 10;
 
     unsigned char recv_buf[8192];
     struct sockaddr_nl nl_addr;
@@ -411,15 +475,15 @@ int main(int argc, char **argv) {
         }
 
         struct timeval timeout;
-        time_t now = time(NULL);
-        time_t time_to_next_flush = (last_flush + flush_interval) - now;
-        if (time_to_next_flush <= 0) {
-            time_to_next_flush = 1;
-        }
-        timeout.tv_sec = time_to_next_flush;
+        time_t now;
+        // Fixed 2-second select timeout — independent of flush timer
+        timeout.tv_sec = 2;
         timeout.tv_usec = 0;
 
         int ready = select(max_fd + 1, &read_fds, NULL, NULL, &timeout);
+
+        // Re-read now after select in case select() took time
+        now = time(NULL);
 
         if (ready < 0) {
             if (errno == EINTR) continue;
@@ -428,18 +492,32 @@ int main(int argc, char **argv) {
             continue;
         }
 
+        // Health check: attempt SOC reconnect if disconnected
+        static time_t last_health_check = 0;
+        if (now - last_health_check > 5) {
+            last_health_check = now;
+            if (soc_fd < 0) {
+                printf("[agent] Health check: SOC disconnected, attempting reconnect...\n");
+                connect_to_soc();
+                if (soc_fd >= 0) {
+                    send_to_soc(MSG_TYPE_PING, NULL, 0);
+                    load_and_push_blocklist();
+                }
+            }
+        }
+
         // 1. Process downstream commands from SOC server
         if (soc_fd >= 0 && FD_ISSET(soc_fd, &read_fds)) {
             struct soc_msg_hdr soc_hdr;
-            int r = read(soc_fd, &soc_hdr, sizeof(soc_hdr));
+            int r = read_exact(soc_fd, &soc_hdr, sizeof(soc_hdr));
             if (r <= 0) {
-                printf("[agent] SOC server disconnected. Resetting connection.\n");
+                printf("[agent] SOC server disconnected or read error. Resetting connection.\n");
                 close(soc_fd);
                 soc_fd = -1;
                 continue;
             }
 
-            if (r == sizeof(soc_hdr) && ntohl(soc_hdr.magic) == MAGIC_HEADER) {
+            if (ntohl(soc_hdr.magic) == MAGIC_HEADER) {
                 uint32_t payload_len = ntohl(soc_hdr.payload_len);
                 if (payload_len > 0 && payload_len < 16777216) {
                     char *encrypted = malloc(payload_len);
@@ -447,16 +525,19 @@ int main(int argc, char **argv) {
                         fprintf(stderr, "[agent] Failed to allocate memory for payload\n");
                         continue;
                     }
-                    size_t total_read = 0;
-                    while (total_read < payload_len) {
-                        int read_bytes = read(soc_fd, encrypted + total_read, payload_len - total_read);
-                        if (read_bytes <= 0) break;
-                        total_read += read_bytes;
+                    
+                    int read_bytes = read_exact(soc_fd, encrypted, payload_len);
+                    if (read_bytes != (int)payload_len) {
+                        fprintf(stderr, "[agent] Failed to read full payload from SOC\n");
+                        free(encrypted);
+                        close(soc_fd);
+                        soc_fd = -1;
+                        continue;
                     }
 
                     void *decrypted = NULL;
                     size_t dec_len = 0;
-                    if (pgp_decrypt(encrypted, payload_len, &decrypted, &dec_len) == 0) {
+                    if (aes_decrypt((const char *)encrypted, payload_len, &decrypted, &dec_len) == 0) {
                         if (soc_hdr.msg_type == MSG_TYPE_BLOCK_IP) {
                             // Block single IP
                             if (dec_len >= 4) {
@@ -570,6 +651,8 @@ int main(int argc, char **argv) {
                             }
                         }
                         free(decrypted);
+                    } else {
+                        fprintf(stderr, "[agent] Failed to decrypt downstream command from SOC using AES\n");
                     }
                     free(encrypted);
                 }
@@ -613,8 +696,18 @@ int main(int argc, char **argv) {
                        event.threat_type, event.severity, event.payload_preview);
 
                 if (event.severity == SEVERITY_CRITICAL || event.severity == SEVERITY_WARNING) {
-                    printf("[agent] Suspicious event detected. Triggering instant alert send...\n");
-                    send_to_soc(MSG_TYPE_ALERT, &event, sizeof(struct fw_event));
+                    if (is_duplicate_alert(&event)) {
+                        printf("[agent] Duplicate critical alert for IP %u/Threat %d. Queuing to batch.\n", event.src_ip, event.threat_type);
+                        if (event_count < EVENT_BUFFER_SIZE) {
+                            memcpy(&event_buffer[event_count], &event, sizeof(struct fw_event));
+                            event_count++;
+                        } else {
+                            printf("[agent] Event buffer full. Dropping log.\n");
+                        }
+                    } else {
+                        printf("[agent] Suspicious event detected. Triggering instant alert send...\n");
+                        send_to_soc(MSG_TYPE_ALERT, &event, sizeof(struct fw_event));
+                    }
                 } else {
                     if (event_count < EVENT_BUFFER_SIZE) {
                         memcpy(&event_buffer[event_count], &event, sizeof(struct fw_event));

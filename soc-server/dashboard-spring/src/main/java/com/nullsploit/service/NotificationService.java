@@ -9,6 +9,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import jakarta.mail.internet.MimeMessage;
 
+import java.io.OutputStream;
+import java.net.Socket;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -26,6 +28,7 @@ public class NotificationService {
 
     // Cache or track last ID locally, but fallback to DB config key to persist
     private long lastProcessedId = -1;
+    private volatile long lastRepUpdate = 0;
 
     private String getConfigString(String key, String defaultVal) {
         try {
@@ -76,16 +79,21 @@ public class NotificationService {
         return mailSender;
     }
 
-    @Scheduled(fixedDelay = 1000)
+    @Scheduled(fixedDelay = 5000)
     public void checkNewEventsAndNotify() {
-        // Sync events to ip_reputation dynamically based on severity weights
-        try {
-            jdbc.update(
-                "INSERT INTO ip_reputation (ip, local_score, score, attack_types, updated_at) " +
+        // Circuit breaker: only run reputation sync every 30 seconds
+        long now = System.currentTimeMillis();
+        if (now - lastRepUpdate > 30000) {
+            lastRepUpdate = now;
+            // Sync events to ip_reputation dynamically based on severity weights
+            try {
+                jdbc.update(
+                "INSERT INTO ip_reputation (ip, local_score, external_score, score, attack_types, updated_at) " +
                 "SELECT " +
                 "    src_ip, " +
-                "    LEAST(100, SUM(CASE WHEN severity = 2 THEN 25 WHEN severity = 1 THEN 15 ELSE 5 END)) as calc_local_score, " +
-                "    LEAST(100, SUM(CASE WHEN severity = 2 THEN 25 WHEN severity = 1 THEN 15 ELSE 5 END)) as calc_score, " +
+                "    GREATEST(0, 100 - SUM(CASE WHEN severity = 2 THEN 25 WHEN severity = 1 THEN 15 ELSE 5 END)) as calc_local_score, " +
+                "    100, " +
+                "    GREATEST(0, 100 - SUM(CASE WHEN severity = 2 THEN 25 WHEN severity = 1 THEN 15 ELSE 5 END)) as calc_score, " +
                 "    ARRAY_AGG(DISTINCT 'attack'::text), " +
                 "    NOW() " +
                 "FROM events " +
@@ -93,38 +101,62 @@ public class NotificationService {
                 "ON CONFLICT (ip) DO UPDATE " +
                 "SET " +
                 "    local_score = EXCLUDED.local_score, " +
-                "    score = LEAST(100, EXCLUDED.local_score + ip_reputation.external_score), " +
+                "    score = LEAST(EXCLUDED.local_score, ip_reputation.external_score), " +
                 "    updated_at = NOW()"
             );
         } catch (Exception e) {
             System.err.println("[NotificationService] Dynamic reputation calculations failed: " + e.getMessage());
         }
 
-        // Auto-block high malice IPs (score >= 80)
+        // Auto-block low reputation IPs (score <= 20)
         try {
-            jdbc.update(
-                "INSERT INTO blocklist (ip_cidr, list_type, reason, source) " +
-                "SELECT ip, 'block', 'Auto-blocked: Low reputation (Score: ' || score || ')', 'system' " +
-                "FROM ip_reputation r " +
-                "WHERE score >= 80 " +
+            List<String> ipsToBlock = jdbc.queryForList(
+                "SELECT host(ip) as ip FROM ip_reputation r " +
+                "WHERE score <= 20 " +
                 "  AND NOT EXISTS ( " +
                 "      SELECT 1 FROM blocklist b " +
                 "      WHERE b.ip_cidr = r.ip " +
-                "  )"
+                "  )",
+                String.class
             );
+
+            if (!ipsToBlock.isEmpty()) {
+                jdbc.update(
+                    "INSERT INTO blocklist (ip_cidr, list_type, reason, source) " +
+                    "SELECT ip, 'block', 'Auto-blocked: Low reputation (Score: ' || score || ')', 'system' " +
+                    "FROM ip_reputation r " +
+                    "WHERE score <= 20 " +
+                    "  AND NOT EXISTS ( " +
+                    "      SELECT 1 FROM blocklist b " +
+                    "      WHERE b.ip_cidr = r.ip " +
+                    "  )"
+                );
+
+                for (String ip : ipsToBlock) {
+                    System.out.println("[NotificationService] Auto-blocking IP " + ip + " and pushing to agents");
+                    pushBlocklistUpdateToAgents(ip, 3); // 3 = MSG_TYPE_BLOCK_IP
+                }
+            }
         } catch (Exception e) {
             System.err.println("[NotificationService] Auto-block execution failed: " + e.getMessage());
         }
+        } // End circuit-breaker for reputation/auto-block
 
         // Initialize lastProcessedId on first execution
         if (lastProcessedId == -1) {
             String lastIdStr = getConfigString("last_notified_event_id", "0");
             lastProcessedId = Long.parseLong(lastIdStr);
 
+            Long maxId = jdbc.queryForObject("SELECT COALESCE(MAX(id), 0) FROM events", Long.class);
+            long dbMaxId = maxId != null ? maxId : 0;
+            if (lastProcessedId > dbMaxId) {
+                lastProcessedId = dbMaxId;
+                saveConfig("last_notified_event_id", String.valueOf(lastProcessedId), "system", "Last processed event ID");
+            }
+
             // If it is 0, let's grab the current max ID in the events table so we don't spam old events
             if (lastProcessedId == 0) {
-                Long maxId = jdbc.queryForObject("SELECT COALESCE(MAX(id), 0) FROM events", Long.class);
-                lastProcessedId = maxId != null ? maxId : 0;
+                lastProcessedId = dbMaxId;
                 saveConfig("last_notified_event_id", String.valueOf(lastProcessedId), "system", "Last processed event ID");
             }
             System.out.println("[NotificationService] Initialized. Last processed event ID: " + lastProcessedId);
@@ -233,5 +265,51 @@ public class NotificationService {
         helper.setText(htmlContent, true);
         mailSender.send(message);
         System.out.println("[NotificationService] Sent test email successfully to " + to);
+    }
+
+    public void pushBlocklistUpdateToAgents(String ipCidr, int commandType) {
+        try {
+            String ip = ipCidr;
+            if (ip.contains("/")) {
+                ip = ip.substring(0, ip.indexOf("/"));
+            }
+            
+            String[] parts = ip.split("\\.");
+            long ipVal = 0;
+            for (int i = 0; i < 4; i++) {
+                ipVal |= (Long.parseLong(parts[i]) << (i * 8));
+            }
+
+            List<String> uuids = jdbc.queryForList(
+                "SELECT uuid::text FROM agents WHERE last_seen >= CURRENT_TIMESTAMP - INTERVAL '30 seconds'",
+                String.class
+            );
+
+            for (String uuid : uuids) {
+                try (Socket socket = new Socket("127.0.0.1", 8444);
+                     OutputStream out = socket.getOutputStream()) {
+                    
+                    byte[] uuidBytes = new byte[33];
+                    byte[] rawUuid = uuid.replace("-", "").getBytes();
+                    System.arraycopy(rawUuid, 0, uuidBytes, 0, Math.min(rawUuid.length, 32));
+                    
+                    out.write(uuidBytes); // 33 bytes agent_uuid_hex
+                    out.write(commandType); // 1 byte MSG_TYPE_BLOCK_IP (3) or MSG_TYPE_UNBLOCK_IP (4)
+                    
+                    byte[] ipBytes = new byte[4];
+                    ipBytes[0] = (byte) (ipVal & 0xFF);
+                    ipBytes[1] = (byte) ((ipVal >> 8) & 0xFF);
+                    ipBytes[2] = (byte) ((ipVal >> 16) & 0xFF);
+                    ipBytes[3] = (byte) ((ipVal >> 24) & 0xFF);
+                    out.write(ipBytes);   // 4 bytes IP address
+                    
+                    out.flush();
+                } catch (Exception e) {
+                    System.err.println("Failed to push blocklist update to agent " + uuid + ": " + e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to parse IP for blocklist update: " + ipCidr);
+        }
     }
 }

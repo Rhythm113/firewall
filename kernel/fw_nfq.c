@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -15,7 +16,9 @@
 #include <libnetfilter_queue/libnetfilter_queue.h>
 #include <linux/netfilter.h>
 
+#ifndef BUILD_USERSPACE
 #define BUILD_USERSPACE
+#endif
 #include "userspace_compat.h"
 #include "fw_inspect.h"
 #include "ip_reputation.h"
@@ -29,6 +32,10 @@
 // Active agent socket fd
 static int agent_fd = -1;
 static pthread_mutex_t agent_lock = PTHREAD_MUTEX_INITIALIZER;
+// Drop counter — incremented when send_fw_event discards events because the
+// agent UNIX socket buffer is full. Exposed so SOC or health endpoint can
+// warn about agent throughput bottleneck.
+static volatile unsigned long dropped_event_count = 0;
 
 // Connection pool functions
 extern int init_conn_pool(void);
@@ -37,11 +44,58 @@ extern void cleanup_conn_pool(void);
 extern int g_block_local_ips;
 
 static int is_local_ip(uint32_t ip) {
-    uint8_t *p = (uint8_t *)&ip;
-    if (p[0] == 127) return 1;
-    if (p[0] == 10) return 1;
-    if (p[0] == 172 && (p[1] >= 16 && p[1] <= 31)) return 1;
-    if (p[0] == 192 && p[1] == 168) return 1;
+    uint32_t host_ip = ntohl(ip);
+    uint8_t o1 = (host_ip >> 24) & 0xFF;
+    uint8_t o2 = (host_ip >> 16) & 0xFF;
+    
+    if (o1 == 127) return 1;
+    if (o1 == 10) return 1;
+    if (o1 == 172 && o2 >= 16 && o2 <= 31) return 1;
+    if (o1 == 192 && o2 == 168) return 1;
+    return 0;
+}
+
+static int is_bypassed_ip(uint32_t ip) {
+    uint32_t host_ip = ntohl(ip);
+    uint8_t o1 = (host_ip >> 24) & 0xFF;
+    uint8_t o2 = (host_ip >> 16) & 0xFF;
+    uint8_t o3 = (host_ip >> 8) & 0xFF;
+    
+    // 1. Loopback is always bypassed
+    if (o1 == 127) return 1;
+    
+    // 2. Docker Desktop host gateway network (192.168.65.0/24)
+    // Only bypass if we are running inside Docker to avoid affecting bare metal systems
+    static int in_docker = -1;
+    if (in_docker == -1) {
+        in_docker = (access("/.dockerenv", F_OK) == 0);
+    }
+    if (in_docker && o1 == 192 && o2 == 168 && o3 == 65) return 1;
+    
+    // 3. Container's default gateway (dynamically read from /proc/net/route)
+    static uint32_t default_gw = 0;
+    static int gw_initialized = 0;
+    if (!gw_initialized) {
+        FILE *f = fopen("/proc/net/route", "r");
+        if (f) {
+            char line[256];
+            while (fgets(line, sizeof(line), f)) {
+                char iface[32];
+                uint32_t dest, gateway;
+                if (sscanf(line, "%31s %x %x", iface, &dest, &gateway) == 3) {
+                    if (dest == 0) { // Default route
+                        default_gw = gateway;
+                        break;
+                    }
+                }
+            }
+            fclose(f);
+        }
+        gw_initialized = 1;
+    }
+    
+    if (default_gw != 0 && ip == default_gw) return 1;
+    
     return 0;
 }
 
@@ -52,14 +106,22 @@ extern int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct t
 extern int monitor_tcp_stats(struct iphdr *iph, struct tcphdr *tcph);
 
 // Implementation of send_fw_event for userspace (writes to UNIX socket)
+// Uses non-blocking writes so the NFQUEUE callback never stalls when the
+// agent is overwhelmed. Events that can't be delivered are counted and dropped.
 void send_fw_event(struct fw_event *event) {
     pthread_mutex_lock(&agent_lock);
     if (agent_fd != -1) {
-        int bytes_sent = write(agent_fd, event, sizeof(struct fw_event));
+        int bytes_sent = send(agent_fd, event, sizeof(struct fw_event), MSG_DONTWAIT);
         if (bytes_sent < 0) {
-            printf("[fw_nfq] Agent disconnected. Closing socket.\n");
-            close(agent_fd);
-            agent_fd = -1;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Socket buffer full — agent is backlogged. Drop event
+                // gracefully instead of blocking the entire NFQUEUE pipeline.
+                dropped_event_count++;
+            } else {
+                printf("[fw_nfq] Agent disconnected. Closing socket.\n");
+                close(agent_fd);
+                agent_fd = -1;
+            }
         } else {
             printf("[fw_nfq] Alert sent to agent. Threat type: %d, Severity: %d\n", event->threat_type, event->severity);
         }
@@ -139,7 +201,7 @@ void *agent_listener_thread(void *arg) {
 
         pthread_mutex_lock(&agent_lock);
         if (agent_fd != -1) {
-            close(agent_fd); 
+            close(agent_fd);
         }
         agent_fd = client_fd;
         pthread_mutex_unlock(&agent_lock);
@@ -203,9 +265,14 @@ static int fw_nfq_callback(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 
         struct iphdr *iph = (struct iphdr *)payload;
 
-        // 1. IP Reputation Check (Log threat but do not block here)
+        // 0. Bypassed IP check (loopback/gateway) - always accept
+        if (is_bypassed_ip(iph->saddr)) {
+            return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+        }
+
+        // 1. IP Reputation Check — block IPs with poor reputation
         int rep_score = get_ip_reputation(iph->saddr);
-        if (rep_score >= 80) {
+        if (rep_score <= 20) {
             struct fw_event event = {
                 .timestamp = ktime_get_real_seconds(),
                 .src_ip = iph->saddr,
@@ -214,8 +281,9 @@ static int fw_nfq_callback(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
                 .severity = SEVERITY_CRITICAL,
             };
             snprintf(event.payload_preview, sizeof(event.payload_preview), "IP Reputation: %d", rep_score);
-            snprintf(event.details, sizeof(event.details), "High reputation score detected (score >= 80)");
+            snprintf(event.details, sizeof(event.details), "Low reputation score — blocking IP (score <= 20)");
             send_fw_event(&event);
+            verdict = NF_DROP;
         }
         // 2. IP Blocklist check
         if (inspect_ip_blocklist(iph->saddr)) {
@@ -260,6 +328,8 @@ static int fw_nfq_callback(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 }
 
 int main(int argc, char **argv) {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
     struct nfq_handle *h;
     struct nfq_q_handle *qh;
     int fd;

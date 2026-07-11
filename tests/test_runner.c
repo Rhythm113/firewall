@@ -212,18 +212,18 @@ void test_advanced_detectors() {
     // IP Reputation Test
     {
         uint32_t ip = inet_addr("198.51.100.12");
-        assert(get_ip_reputation(ip) == 0);
-        
+        assert(get_ip_reputation(ip) == 100); // Unknown IP → perfect reputation
+
         // Update reputation
         update_ip_reputation(ip, 30, THREAT_SQLI);
-        assert(get_ip_reputation(ip) == 30);
-        
+        assert(get_ip_reputation(ip) == 70); // 100 - 30
+
         update_ip_reputation(ip, 60, THREAT_CMDI);
-        assert(get_ip_reputation(ip) == 90); // 30 + 60
-        
-        // Decay reputation
+        assert(get_ip_reputation(ip) == 10); // 70 - 60
+
+        // Decay reputation (recovery)
         decay_reputation_scores(20);
-        assert(get_ip_reputation(ip) == 70); // 90 - 20
+        assert(get_ip_reputation(ip) == 30); // 10 + 20
         printf("  IP Reputation Tests: Passed\n");
     }
 }
@@ -365,11 +365,14 @@ void test_tcp_monitor() {
 
 extern int g_block_local_ips;
 static int is_local_ip(uint32_t ip) {
-    uint8_t *p = (uint8_t *)&ip;
-    if (p[0] == 127) return 1;
-    if (p[0] == 10) return 1;
-    if (p[0] == 172 && (p[1] >= 16 && p[1] <= 31)) return 1;
-    if (p[0] == 192 && p[1] == 168) return 1;
+    uint32_t host_ip = ntohl(ip);
+    uint8_t o1 = (host_ip >> 24) & 0xFF;
+    uint8_t o2 = (host_ip >> 16) & 0xFF;
+    
+    if (o1 == 127) return 1;
+    if (o1 == 10) return 1;
+    if (o1 == 172 && o2 >= 16 && o2 <= 31) return 1;
+    if (o1 == 192 && o2 == 168) return 1;
     return 0;
 }
 

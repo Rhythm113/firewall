@@ -6,6 +6,11 @@ echo "[entrypoint] Setting up Apache httpd configuration for PHP-FPM proxying...
 sed -i 's/#LoadModule proxy_module/LoadModule proxy_module/' /usr/local/apache2/conf/httpd.conf
 sed -i 's/#LoadModule proxy_fcgi_module/LoadModule proxy_fcgi_module/' /usr/local/apache2/conf/httpd.conf
 
+# Change Apache from the source-build default (daemon) to www-data so it can
+# connect to the PHP-FPM socket owned by www-data:www-data
+sed -i 's/^User .*/User www-data/' /usr/local/apache2/conf/httpd.conf
+sed -i 's/^Group .*/Group www-data/' /usr/local/apache2/conf/httpd.conf
+
 # Add Handler for PHP-FPM UNIX socket proxying
 if ! grep -q "SetHandler \"proxy:unix:/run/php/php7.4-fpm.sock|fcgi://localhost\"" /usr/local/apache2/conf/httpd.conf; then
     cat <<EOF >> /usr/local/apache2/conf/httpd.conf
@@ -20,6 +25,13 @@ sed -i 's/DirectoryIndex index.html/DirectoryIndex index.php index.html/' /usr/l
 
 # Ensure PHP-FPM socket directory exists
 mkdir -p /run/php
+
+# Ensure PHP-FPM pool config allows www-data to access the socket
+if [ -f "/etc/php/7.4/fpm/pool.d/www.conf" ]; then
+    sed -i 's/^listen.owner =.*/listen.owner = www-data/' /etc/php/7.4/fpm/pool.d/www.conf 2>/dev/null || true
+    sed -i 's/^listen.group =.*/listen.group = www-data/' /etc/php/7.4/fpm/pool.d/www.conf 2>/dev/null || true
+    sed -i 's/^listen.mode =.*/listen.mode = 0660/' /etc/php/7.4/fpm/pool.d/www.conf 2>/dev/null || true
+fi
 
 # Ensure upload directory exists and has correct permissions for www-data
 UPLOAD_DIR_PATH=${UPLOAD_DIR:-/var/www/uploads}
@@ -36,38 +48,8 @@ echo "[entrypoint] Setting up Netfilter iptables rules for NFQUEUE..."
 # Intercept incoming port 80 (HTTP) and port 443 (HTTPS) traffic and send it to NFQUEUE queue 0
 iptables -A INPUT -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 0
 
-echo "[entrypoint] Generating PGP key pair for agent if not exists..."
-if [ ! -d "/root/.gnupg" ] || [ ! -f "/root/.gnupg/pubring.kbx" ]; then
-    mkdir -p /root/.gnupg
-    chmod 700 /root/.gnupg
-    
-    cat <<EOF > /tmp/gpg_agent_gen.conf
-Key-Type: RSA
-Key-Length: 2048
-Subkey-Type: RSA
-Subkey-Length: 2048
-Name-Real: Agent
-Name-Email: agent@soc.local
-Expire-Date: 0
-%no-protection
-%commit
-EOF
-
-    gpg --batch --generate-key /tmp/gpg_agent_gen.conf
-    rm /tmp/gpg_agent_gen.conf
-    echo "[entrypoint] Agent PGP key pair generated successfully."
-fi
-
-# Import the SOC Server's public key (placed via volume mount)
-if [ -f "/etc/fw_keys/soc_pubkey.asc" ]; then
-    echo "[entrypoint] Importing SOC Server public key..."
-    gpg --import /etc/fw_keys/soc_pubkey.asc
-fi
-
-# Export Agent's public key so the SOC can import it if needed
+# Ensure /etc/fw_keys directory exists for agent uuid
 mkdir -p /etc/fw_keys
-gpg --armor --export agent@soc.local > /etc/fw_keys/agent_pubkey.asc
-echo "[entrypoint] Agent public key exported to /etc/fw_keys/agent_pubkey.asc"
 
 # Create a default YARA rule file so the engine starts cleanly
 mkdir -p /etc/fw_inspect/yara

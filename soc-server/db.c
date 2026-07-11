@@ -5,9 +5,34 @@
 #include <stdarg.h>
 #include <postgresql/libpq-fe.h>
 #include <arpa/inet.h>
+#include <pthread.h>
 #include "db.h"
 
 static PGconn *conn = NULL;
+static pthread_mutex_t db_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static PGresult *db_exec_safe(PGconn *c, const char *query) {
+    pthread_mutex_lock(&db_mutex);
+    PGresult *res = PQexec(c, query);
+    pthread_mutex_unlock(&db_mutex);
+    return res;
+}
+
+static PGresult *db_exec_params_safe(PGconn *c, const char *command,
+                                     int nParams, const Oid *paramTypes,
+                                     const char *const *paramValues,
+                                     const int *paramLengths,
+                                     const int *paramFormats,
+                                     int resultFormat) {
+    pthread_mutex_lock(&db_mutex);
+    PGresult *res = PQexecParams(c, command, nParams, paramTypes, paramValues, paramLengths, paramFormats, resultFormat);
+    pthread_mutex_unlock(&db_mutex);
+    return res;
+}
+
+#define PQexec(c, q) db_exec_safe(c, q)
+#define PQexecParams(c, cmd, n, t, v, l, f, r) db_exec_params_safe(c, cmd, n, t, v, l, f, r)
+
 
 // Helper to convert UUID to hex string
 static void uuid_to_str(const uint8_t *uuid, char *out, size_t out_len) {
@@ -166,9 +191,9 @@ int db_init(const char *conninfo) {
     res = PQexec(conn,
         "CREATE TABLE IF NOT EXISTS ip_reputation ("
         "  ip INET PRIMARY KEY,"
-        "  score INTEGER DEFAULT 0,"
-        "  local_score INTEGER DEFAULT 0,"
-        "  external_score INTEGER DEFAULT 0,"
+        "  score INTEGER DEFAULT 100,"
+        "  local_score INTEGER DEFAULT 100,"
+        "  external_score INTEGER DEFAULT 100,"
         "  total_blocks INTEGER DEFAULT 0,"
         "  attack_types TEXT[] DEFAULT '{}',"
         "  first_seen TIMESTAMPTZ DEFAULT NOW(),"
@@ -281,6 +306,19 @@ int db_init(const char *conninfo) {
     PQexec(conn, "CREATE INDEX IF NOT EXISTS idx_blocklist_type ON blocklist(list_type);");
     PQexec(conn, "CREATE INDEX IF NOT EXISTS idx_ai_dataset_event ON ai_analysis_dataset(event_id);");
 
+    // Create agent_logs table
+    PQexec(conn,
+        "CREATE TABLE IF NOT EXISTS agent_logs ("
+        "  id BIGSERIAL PRIMARY KEY,"
+        "  agent_uuid UUID,"
+        "  log_type TEXT NOT NULL DEFAULT 'info',"
+        "  message TEXT,"
+        "  src_ip INET,"
+        "  created_at TIMESTAMPTZ DEFAULT NOW()"
+        ");");
+    PQexec(conn, "CREATE INDEX IF NOT EXISTS idx_agent_logs_agent ON agent_logs(agent_uuid);");
+    PQexec(conn, "CREATE INDEX IF NOT EXISTS idx_agent_logs_time ON agent_logs(created_at DESC);");
+
     // Clean up duplicate threat profiles in existing database records
     PQexec(conn, "UPDATE ip_reputation SET attack_types = ARRAY(SELECT DISTINCT unnest(attack_types)) WHERE attack_types IS NOT NULL;");
 
@@ -381,6 +419,81 @@ int db_insert_event(const uint8_t *agent_uuid, const struct fw_event *event) {
 
     PQclear(res);
     return 0;
+}
+
+int db_insert_agent_log(const uint8_t *agent_uuid, const char *log_type, const char *message, const char *src_ip) {
+    char uuid_str[37];
+    const char *uuid_ptr = NULL;
+    if (agent_uuid) {
+        uuid_to_str(agent_uuid, uuid_str, sizeof(uuid_str));
+        uuid_ptr = uuid_str;
+    }
+
+    const char *sql =
+        "INSERT INTO agent_logs (agent_uuid, log_type, message, src_ip, created_at) "
+        "VALUES ($1::uuid, $2, $3, $4::inet, NOW())";
+    const char *paramValues[4] = { uuid_ptr, log_type, message, src_ip ? src_ip : "0.0.0.0" };
+    PGresult *res = PQexecParams(conn, sql, 4, NULL, paramValues, NULL, NULL, 0);
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        fprintf(stderr, "[db] Insert agent_log failed: %s\n", PQerrorMessage(conn));
+        PQclear(res);
+        return -1;
+    }
+    PQclear(res);
+    return 0;
+}
+
+char *db_get_agent_logs_json(int limit, int offset, const char *search) {
+    char limit_str[16], offset_str[16];
+    snprintf(limit_str, sizeof(limit_str), "%d", limit);
+    snprintf(offset_str, sizeof(offset_str), "%d", offset);
+
+    PGresult *res;
+    if (search && strlen(search) > 0) {
+        char search_pattern[256];
+        snprintf(search_pattern, sizeof(search_pattern), "%%%s%%", search);
+        const char *sql =
+            "SELECT l.id, l.agent_uuid::text, host(l.src_ip) as src_ip, l.log_type, l.message, "
+            "to_char(l.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at "
+            "FROM agent_logs l "
+            "WHERE l.message ILIKE $1 OR l.log_type ILIKE $1 OR host(l.src_ip) ILIKE $1 "
+            "ORDER BY l.created_at DESC LIMIT $2 OFFSET $3";
+        const char *paramValues[3] = { search_pattern, limit_str, offset_str };
+        res = PQexecParams(conn, sql, 3, NULL, paramValues, NULL, NULL, 0);
+    } else {
+        const char *sql =
+            "SELECT l.id, l.agent_uuid::text, host(l.src_ip) as src_ip, l.log_type, l.message, "
+            "to_char(l.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at "
+            "FROM agent_logs l "
+            "ORDER BY l.created_at DESC LIMIT $1 OFFSET $2";
+        const char *paramValues[2] = { limit_str, offset_str };
+        res = PQexecParams(conn, sql, 2, NULL, paramValues, NULL, NULL, 0);
+    }
+
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        PQclear(res);
+        return strdup("[]");
+    }
+
+    int rows = PQntuples(res);
+    struct json_buf jb;
+    json_buf_init(&jb);
+    json_buf_append(&jb, "[");
+    for (int i = 0; i < rows; i++) {
+        if (i > 0) json_buf_append(&jb, ",");
+        json_buf_append(&jb,
+            "{\"id\":%s,\"agent_uuid\":\"%s\",\"src_ip\":\"%s\",\"log_type\":\"%s\","
+            "\"message\":\"%s\",\"created_at\":\"%s\"}",
+            PQgetvalue(res, i, 0),
+            PQgetvalue(res, i, 1),
+            PQgetvalue(res, i, 2),
+            PQgetvalue(res, i, 3),
+            PQgetvalue(res, i, 4),
+            PQgetvalue(res, i, 5));
+    }
+    json_buf_append(&jb, "]");
+    PQclear(res);
+    return jb.buf;
 }
 
 char *db_get_events_json(int limit, int offset, const char *agent_filter) {
@@ -582,7 +695,7 @@ int db_remove_from_blocklist(const char *ip_cidr, const char *list_type) {
 }
 
 char *db_get_blocklist_json(const char *list_type) {
-    const char *sql = "SELECT id, ip_cidr::text, reason, created_at FROM blocklist WHERE list_type = $1 ORDER BY id DESC;";
+    const char *sql = "SELECT id, host(ip_cidr) as ip_cidr, reason, created_at FROM blocklist WHERE list_type = $1 ORDER BY id DESC;";
     const char *paramValues[1] = { list_type };
     PGresult *res = PQexecParams(conn, sql, 1, NULL, paramValues, NULL, NULL, 0);
 
@@ -611,7 +724,9 @@ int db_update_ip_reputation(const char *ip, int score, int local_score, int exte
         "INSERT INTO ip_reputation (ip, score, local_score, external_score, attack_types, last_seen) "
         "VALUES ($1, $2, $3, $4, string_to_array($5, ','), NOW()) "
         "ON CONFLICT (ip) DO UPDATE SET "
-        "score = EXCLUDED.score, local_score = EXCLUDED.local_score, external_score = EXCLUDED.external_score, "
+        "local_score = LEAST(ip_reputation.local_score, EXCLUDED.local_score), "
+        "external_score = LEAST(ip_reputation.external_score, EXCLUDED.external_score), "
+        "score = LEAST(LEAST(ip_reputation.local_score, EXCLUDED.local_score), LEAST(ip_reputation.external_score, EXCLUDED.external_score)), "
         "attack_types = ARRAY(SELECT DISTINCT unnest(array_cat(coalesce(ip_reputation.attack_types, '{}'::text[]), coalesce(EXCLUDED.attack_types, '{}'::text[])))), last_seen = NOW(), updated_at = NOW();";
 
     char score_str[16], local_str[16], ext_str[16];
@@ -638,7 +753,7 @@ char *db_get_reputation_json(const char *ip) {
         const char *paramValues[1] = { ip };
         res = PQexecParams(conn, sql, 1, NULL, paramValues, NULL, NULL, 0);
     } else {
-        const char *sql = "SELECT host(ip) as ip, score, local_score, external_score, array_to_string(attack_types, ','), updated_at FROM ip_reputation ORDER BY score DESC LIMIT 100;";
+        const char *sql = "SELECT host(ip) as ip, score, local_score, external_score, array_to_string(attack_types, ','), updated_at FROM ip_reputation ORDER BY score ASC LIMIT 100;";
         res = PQexec(conn, sql);
     }
 

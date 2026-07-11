@@ -4,7 +4,7 @@ Nullsploit is a distributed, high-performance Web Application Firewall (WAF) and
 
 ## Features
 - **Next.js 15 + shadcn/ui Dashboard**: Premium real-time analytics panel displaying events, active agents, blocklists, IP reputation tracking, YARA rules manager, and threat intelligence.
-- **Bi-directional PGP Agent Protocol**: Agents register dynamically and connect to the SOC server on port 1113. Alerts are PGP-encrypted and sent to the server in real-time. Settings and IP block lists are pushed from the dashboard down to the agents.
+- **Bi-directional AES Agent Protocol**: Agents register dynamically and connect to the SOC server on port 1113. Alerts are AES-encrypted and sent to the server in real-time. Settings and IP block lists are pushed from the dashboard down to the agents.
 - **Deep Packet Inspection (DPI) Engine**: C-based userspace WAF daemon (`fw_nfq`) powered by Netfilter Queues (`iptables NFQUEUE`).
 - **SQL Injection Tokenizer**: Scans and parses payloads for SQLi indicators (Union Select, Boolean Tautology, Stacked queries).
 - **Command Injection Scanner**: Detects shell metacharacters, reverse shells, and malicious Unix binaries.
@@ -20,7 +20,7 @@ Nullsploit is a distributed, high-performance Web Application Firewall (WAF) and
 ## Architecture Overview
 
 ```
-                          PGP over TCP (1113)
+                          AES over TCP (1113)
   [ WAF Node: Apache ] ────────────────────────► [ SOC Server (C Backend) ]
   (fw_nfq + inotify)                                   │
           │                                            ▼
@@ -36,7 +36,7 @@ Nullsploit is a distributed, high-performance Web Application Firewall (WAF) and
 ## Setup & Execution
 
 ### 1. Build and Launch
-Generate PGP keys, initialize PostgreSQL schemas, compile WAF and Agent C modules, build Next.js statically, and launch the multi-container stack:
+Initialize PostgreSQL schemas, compile WAF and Agent C modules, build the web console, and launch the multi-container stack:
 ```bash
 docker compose up -d --build
 ```

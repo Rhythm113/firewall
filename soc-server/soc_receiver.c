@@ -13,7 +13,7 @@
 #include "protocol.h"
 #include "db.h"
 #include "auth.h"
-#include "pgp_wrapper.h"
+#include "aes_wrapper.h"
 #include "threat_intel.h"
 
 #define MAX_EVENTS 64
@@ -98,6 +98,59 @@ static void sse_broadcast(const char *event_json) {
     pthread_mutex_unlock(&sse_mutex);
 }
 
+/*
+ * Forward a JSON event to the Spring Boot dashboard backend for instant SSE broadcast.
+ * Uses a raw TCP socket (no libcurl dependency) to POST the event to the internal endpoint.
+ * This eliminates the ~5s polling delay from the NotificationService.
+ */
+static void forward_to_spring_boot(const char *event_json) {
+    int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock < 0) return;
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(8443); // Spring Boot server port
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+
+    // 1-second connect timeout via non-block + select
+    int flags = fcntl(sock, F_GETFL, 0);
+    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+    int conn = connect(sock, (struct sockaddr *)&addr, sizeof(addr));
+    if (conn < 0 && errno != EINPROGRESS) {
+        close(sock);
+        return;
+    }
+    struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+    fd_set wset;
+    FD_ZERO(&wset);
+    FD_SET(sock, &wset);
+    if (select(sock + 1, NULL, &wset, NULL, &tv) <= 0) {
+        close(sock);
+        return;
+    }
+    fcntl(sock, F_SETFL, flags); // restore blocking
+
+    size_t json_len = strlen(event_json);
+    char request[8192];
+    int req_len = snprintf(request, sizeof(request),
+        "POST /api/v2/internal/push-event HTTP/1.0\r\n"
+        "Host: 127.0.0.1:8443\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "X-Internal-Key: soc-receiver-forward\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        "%s",
+        json_len, event_json);
+    if (req_len < 0 || (size_t)req_len >= sizeof(request)) {
+        close(sock);
+        return;
+    }
+    send(sock, request, req_len, 0);
+    close(sock);
+}
+
 static int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags == -1) return -1;
@@ -120,16 +173,43 @@ static void unregister_connected_agent(int fd) {
     pthread_mutex_lock(&agents_mutex);
     for (int i = 0; i < MAX_CONNECTED_AGENTS; i++) {
         if (connected_agents[i] && connected_agents[i]->fd == fd) {
+            const char *client_ip = connected_agents[i]->client_ip;
             connected_agents[i] = NULL;
-            break;
+            pthread_mutex_unlock(&agents_mutex);
+            db_insert_agent_log(NULL, "disconnect", "Agent disconnected", client_ip);
+            return;
         }
     }
     pthread_mutex_unlock(&agents_mutex);
 }
 
+// Write all bytes to fd, handling partial writes
+static int write_all(int fd, const void *buf, size_t len) {
+    const char *p = (const char *)buf;
+    size_t remaining = len;
+    while (remaining > 0) {
+        ssize_t written = write(fd, p, remaining);
+        if (written <= 0) {
+            if (written < 0 && (errno == EAGAIN || errno == EINTR)) continue;
+            return -1;
+        }
+        p += written;
+        remaining -= written;
+    }
+    return 0;
+}
+
 // Sends block/unblock command down the agent's TCP socket
 static int send_command_to_agent(const char *uuid_hex, uint8_t command_type, const void *data, size_t len) {
     uint8_t target_uuid[16];
+
+    // Validate UUID hex length before parsing
+    size_t uuid_len = strlen(uuid_hex);
+    if (uuid_len != 32) {
+        fprintf(stderr, "[receiver] Invalid UUID hex length: %zu (expected 32)\n", uuid_len);
+        return -1;
+    }
+
     // Parse hex UUID to bytes
     for (int i = 0; i < 16; i++) {
         unsigned int val;
@@ -154,8 +234,8 @@ static int send_command_to_agent(const char *uuid_hex, uint8_t command_type, con
 
     char *encrypted = NULL;
     size_t enc_len = 0;
-    if (pgp_encrypt(data, len, &encrypted, &enc_len) < 0) {
-        fprintf(stderr, "[receiver] Failed to encrypt downstream command with PGP\n");
+    if (aes_encrypt(data, len, &encrypted, &enc_len) < 0) {
+        fprintf(stderr, "[receiver] Failed to encrypt downstream command with AES\n");
         return -1;
     }
 
@@ -166,8 +246,16 @@ static int send_command_to_agent(const char *uuid_hex, uint8_t command_type, con
     };
     memcpy(hdr.agent_uuid, target_uuid, 16);
 
-    write(agent_fd_found, &hdr, sizeof(hdr));
-    write(agent_fd_found, encrypted, enc_len);
+    if (write_all(agent_fd_found, &hdr, sizeof(hdr)) < 0) {
+        fprintf(stderr, "[receiver] Failed to write header to agent %s\n", uuid_hex);
+        free(encrypted);
+        return -1;
+    }
+    if (write_all(agent_fd_found, encrypted, enc_len) < 0) {
+        fprintf(stderr, "[receiver] Failed to write AES payload to agent %s\n", uuid_hex);
+        free(encrypted);
+        return -1;
+    }
     free(encrypted);
 
     printf("[receiver] Dispatched command (Type: %d) to agent: %s\n", command_type, uuid_hex);
@@ -555,14 +643,30 @@ static void process_agent_message(struct agent_connection *conn) {
     void *decrypted_payload = NULL;
     size_t decrypted_len = 0;
 
-    printf("[receiver] Processing message from agent %s (Type: %d, Len: %d)\n", 
+    printf("[receiver] Processing message from agent %s (Type: %d, Len: %d)\n",
            conn->client_ip, conn->hdr.msg_type, conn->payload_len);
+
+    // Clean up any stale connections for the same agent UUID
+    pthread_mutex_lock(&agents_mutex);
+    for (int i = 0; i < MAX_CONNECTED_AGENTS; i++) {
+        if (connected_agents[i] && connected_agents[i]->fd != conn->fd && 
+            memcmp(connected_agents[i]->hdr.agent_uuid, conn->hdr.agent_uuid, 16) == 0) {
+            int old_fd = connected_agents[i]->fd;
+            printf("[receiver] Found stale connection for agent on fd %d. Cleaning up.\n", old_fd);
+            epoll_ctl(epoll_fd, EPOLL_CTL_DEL, old_fd, NULL);
+            close(old_fd);
+            free(connected_agents[i]);
+            connected_agents[i] = NULL;
+        }
+    }
+    pthread_mutex_unlock(&agents_mutex);
 
     db_update_agent_last_seen(conn->hdr.agent_uuid, conn->client_ip);
 
     if (conn->payload_len > 0) {
-        if (pgp_decrypt(conn->buf, conn->payload_len, &decrypted_payload, &decrypted_len) < 0) {
-            fprintf(stderr, "[receiver] Failed to decrypt agent PGP payload\n");
+        if (aes_decrypt(conn->buf, conn->payload_len, &decrypted_payload, &decrypted_len) < 0) {
+            fprintf(stderr, "[receiver] Failed to decrypt agent AES payload\n");
+            db_insert_agent_log(conn->hdr.agent_uuid, "error", "AES decryption failed", conn->client_ip);
             return;
         }
 
@@ -590,8 +694,14 @@ static void process_agent_message(struct agent_connection *conn) {
                     event->payload_preview, event->details);
 
                 sse_broadcast(json_alert);
+                forward_to_spring_boot(json_alert);
+
+                char log_msg[256];
+                snprintf(log_msg, sizeof(log_msg), "ALERT threat_type=%d severity=%d src=%s -> %s",
+                         event->threat_type, event->severity, src_ip_str, dest_ip_str);
+                db_insert_agent_log(conn->hdr.agent_uuid, "alert", log_msg, conn->client_ip);
             }
-        } 
+        }
         else if (conn->hdr.msg_type == MSG_TYPE_BATCH) {
             int num_events = decrypted_len / sizeof(struct fw_event);
             struct fw_event *events = (struct fw_event *)decrypted_payload;
@@ -600,11 +710,16 @@ static void process_agent_message(struct agent_connection *conn) {
             for (int i = 0; i < num_events; i++) {
                 db_insert_event(conn->hdr.agent_uuid, &events[i]);
             }
+
+            char log_msg[128];
+            snprintf(log_msg, sizeof(log_msg), "BATCH received, %d events processed", num_events);
+            db_insert_agent_log(conn->hdr.agent_uuid, "batch", log_msg, conn->client_ip);
         }
 
         if (decrypted_payload) free(decrypted_payload);
     } else {
         printf("[receiver] Received idle heartbeat ping from agent %s\n", conn->client_ip);
+        db_insert_agent_log(conn->hdr.agent_uuid, "heartbeat", "Heartbeat ping received", conn->client_ip);
     }
 }
 
@@ -713,6 +828,8 @@ int main(int argc, char **argv) {
                 strcpy(conn->client_ip, client_ip);
 
                 register_connected_agent(conn);
+
+                db_insert_agent_log(NULL, "connect", "Agent connected", client_ip);
 
                 ev.events = EPOLLIN | EPOLLRDHUP;
                 ev.data.ptr = conn;

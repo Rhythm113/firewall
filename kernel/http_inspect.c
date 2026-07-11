@@ -133,7 +133,7 @@ int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct tcphdr *
     }
 
     // URL decode the payload for pattern matching to support encoded URLs
-    static char decode_buf[4096];
+    char decode_buf[4096];
     int raw_scan_len = payload_len > 2048 ? 2048 : payload_len;
     int scan_len = url_decode((const char *)payload, raw_scan_len, decode_buf, sizeof(decode_buf));
     payload = (unsigned char *)decode_buf;
@@ -207,7 +207,7 @@ int inspect_http_payload(struct sk_buff *skb, struct iphdr *iph, struct tcphdr *
             .src_port = tcph->source,
             .dest_port = tcph->dest,
             .threat_type = THREAT_BOT,
-            .severity = SEVERITY_WARNING,
+            .severity = SEVERITY_INFO,
         };
         snprintf(event.payload_preview, sizeof(event.payload_preview), "%s", pattern);
         snprintf(event.details, sizeof(event.details), "%s", details);

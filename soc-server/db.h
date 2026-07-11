@@ -29,6 +29,16 @@ int db_update_agent_last_seen(const uint8_t *agent_uuid, const char *ip);
 int db_insert_event(const uint8_t *agent_uuid, const struct fw_event *event);
 
 /**
+ * Inserts a log entry from an agent connection.
+ */
+int db_insert_agent_log(const uint8_t *agent_uuid, const char *log_type, const char *message, const char *src_ip);
+
+/**
+ * Queries agent logs and returns them formatted as a JSON string.
+ */
+char *db_get_agent_logs_json(int limit, int offset, const char *search);
+
+/**
  * Queries events and returns them formatted as a JSON string.
  */
 char *db_get_events_json(int limit, int offset, const char *agent_filter);

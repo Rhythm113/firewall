@@ -1,4 +1,4 @@
 # Firewall IP Blocklist
-block_local_ips=0
+block_local_ips=1
 192.168.0.222/32
 10.99.99.99/32

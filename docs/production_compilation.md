@@ -83,46 +83,14 @@ The agent is designed to run with zero runtime dependencies. By linking it stati
    ```bash
    cd agent/
    # Compile and strip symbols for minimal size (-Os -s)
-   gcc -O2 -Wall -static fw_agent.c pgp_wrapper.c -o fw_agent -pthread
+   gcc -O2 -Wall -static fw_agent.c aes_wrapper.c -o fw_agent -pthread -lcrypto
    strip fw_agent
    ```
 3. Copy the resulting `fw_agent` binary to `/usr/local/bin/` on the target server.
 
 ---
 
-## 4. Provisioning PGP Keys on Production
-
-For secure data transmission over port 1113, the agent and the SOC server must trust each other's keys.
-
-### 4a. On the SOC Server
-If running on bare metal, generate the SOC PGP key:
-```bash
-# Generate keypair non-interactively
-gpg --quick-generate-key "SOC Server <soc@soc.local>" rsa2048 encrypt,sign 0
-
-# Export public key to distribute to agents
-gpg --armor --export soc@soc.local > soc_pubkey.asc
-```
-
-### 4b. On the Core Web Server (Agent)
-1. Copy the exported `soc_pubkey.asc` to `/etc/fw_inspect/soc_pubkey.asc`.
-2. Generate the Agent PGP key:
-   ```bash
-   gpg --quick-generate-key "Agent <agent@soc.local>" rsa2048 encrypt,sign 0
-   ```
-3. Import the SOC public key:
-   ```bash
-   gpg --import /etc/fw_inspect/soc_pubkey.asc
-   ```
-4. Export the Agent public key to send to the SOC server:
-   ```bash
-   gpg --armor --export agent@soc.local > agent_pubkey.asc
-   ```
-5. Import this `agent_pubkey.asc` on the SOC server keyring using `gpg --import agent_pubkey.asc`.
-
----
-
-## 5. Graceful Module Reloading (Zero Downtime)
+## 4. Graceful Module Reloading (Zero Downtime)
 
 When updating the firewall module (e.g. changing signature patterns or patching code), you can reload the module without dropping legitimate traffic or restarting the web server.
 

@@ -79,7 +79,7 @@ static void fetch_feodo_tracker(void) {
             sscanf(line, "%63s", ip);
             if (strlen(ip) > 0) {
                 db_save_threat_intel("Feodo_Tracker", "ip", ip, "botnet_c2", 90, "https://feodotracker.abuse.ch/");
-                db_update_ip_reputation(ip, 85, 0, 85, "botnet_c2"); // Force malicious external score
+                db_update_ip_reputation(ip, 15, 100, 15, "botnet_c2"); // Low reputation from known botnet C2
                 count++;
             }
         }
@@ -103,7 +103,7 @@ static void fetch_binary_defense(void) {
             sscanf(line, "%63s", ip);
             if (strlen(ip) > 0) {
                 db_save_threat_intel("Binary_Defense", "ip", ip, "malicious_ip", 80, "https://www.binarydefense.com/");
-                db_update_ip_reputation(ip, 80, 0, 80, "malicious_ip");
+                db_update_ip_reputation(ip, 20, 100, 20, "malicious_ip"); // Low reputation from known malicious IP
                 count++;
             }
         }
@@ -127,7 +127,7 @@ static void fetch_ci_army(void) {
             sscanf(line, "%63s", ip);
             if (strlen(ip) > 0) {
                 db_save_threat_intel("CI_Army", "ip", ip, "scanner", 75, "http://cinsscore.com/");
-                db_update_ip_reputation(ip, 75, 0, 75, "scanner");
+                db_update_ip_reputation(ip, 25, 100, 25, "scanner"); // Reduced reputation from known scanner
                 count++;
             }
         }
