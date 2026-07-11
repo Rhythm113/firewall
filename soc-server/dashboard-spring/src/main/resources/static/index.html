@@ -2133,6 +2133,14 @@
                 fetchData();
             }
         }, 30000);
+
+        // Resume/refresh on page visibility change (tab activation after sleep)
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && sessionStorage.getItem('session_token')) {
+                fetchData();
+                setupSSE();
+            }
+        });
     </script>
 </body>
 </html>
