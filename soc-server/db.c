@@ -919,3 +919,26 @@ char *db_get_threat_intel_json(void) {
     PQclear(res);
     return jb.buf;
 }
+
+int db_update_agent_health(const uint8_t *agent_uuid, double cpu, double mem, uint64_t uptime) {
+    char uuid_str[37];
+    uuid_to_str(agent_uuid, uuid_str, sizeof(uuid_str));
+
+    char json_str[256];
+    snprintf(json_str, sizeof(json_str), "{\"cpu\":%.2f,\"mem\":%.2f,\"uptime\":%lu}", cpu, mem, (unsigned long)uptime);
+
+    const char *sql = 
+        "UPDATE agents SET config = config || $1::jsonb, last_seen = NOW(), status = 'active' WHERE uuid = $2::uuid;";
+
+    const char *paramValues[2] = { json_str, uuid_str };
+    PGresult *res = PQexecParams(conn, sql, 2, NULL, paramValues, NULL, NULL, 0);
+
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        fprintf(stderr, "[db] Update agent health failed: %s\n", PQerrorMessage(conn));
+        PQclear(res);
+        return -1;
+    }
+
+    PQclear(res);
+    return 0;
+}

@@ -75,4 +75,6 @@ char *db_get_config_json(void);
 int db_save_threat_intel(const char *feed_name, const char *ind_type, const char *ind_val, const char *threat_type, int confidence, const char *source_url);
 char *db_get_threat_intel_json(void);
 
+int db_update_agent_health(const uint8_t *agent_uuid, double cpu, double mem, uint64_t uptime);
+
 #endif // DB_H

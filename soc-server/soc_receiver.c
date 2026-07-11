@@ -716,6 +716,15 @@ static void process_agent_message(struct agent_connection *conn) {
             db_insert_agent_log(conn->hdr.agent_uuid, "batch", log_msg, conn->client_ip);
         }
 
+        else if (conn->hdr.msg_type == MSG_TYPE_PING) {
+            if (decrypted_len == sizeof(struct agent_health_payload)) {
+                struct agent_health_payload *health = (struct agent_health_payload *)decrypted_payload;
+                db_update_agent_health(conn->hdr.agent_uuid, health->cpu_usage, health->mem_usage, health->uptime_sec);
+                printf("[receiver] Updated health stats for agent %s: CPU=%.2f%%, MEM=%.2f%%, Uptime=%lu\n",
+                       conn->client_ip, health->cpu_usage, health->mem_usage, (unsigned long)health->uptime_sec);
+            }
+        }
+
         if (decrypted_payload) free(decrypted_payload);
     } else {
         printf("[receiver] Received idle heartbeat ping from agent %s\n", conn->client_ip);

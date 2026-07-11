@@ -17,6 +17,8 @@ public class MonitorService {
     @Autowired
     private JdbcTemplate jdbc;
 
+    private final ObjectMapper mapper = new ObjectMapper();
+
     private final OperatingSystemMXBean osBean = ManagementFactory.getOperatingSystemMXBean();
     private final RuntimeMXBean runtimeBean = ManagementFactory.getRuntimeMXBean();
     private final ThreadMXBean threadBean = ManagementFactory.getThreadMXBean();
@@ -82,6 +84,52 @@ public class MonitorService {
         // --- Spike Detection ---
         Map<String, Object> spike = detectSpike(throughput);
         health.put("spike_alert", spike);
+
+        // --- Node Health Stats ---
+        List<Map<String, Object>> nodes = new ArrayList<>();
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT uuid::text as id, hostname, ip::text as ip, " +
+                "CASE WHEN last_seen >= CURRENT_TIMESTAMP - INTERVAL '30 seconds' THEN 'active' ELSE 'offline' END as status, " +
+                "config FROM agents"
+            );
+            for (Map<String, Object> row : rows) {
+                Map<String, Object> node = new LinkedHashMap<>();
+                node.put("id", row.get("id"));
+                node.put("hostname", row.get("hostname"));
+                node.put("ip", row.get("ip"));
+                node.put("status", row.get("status"));
+                
+                double cpuVal = -1;
+                double memVal = -1;
+                long uptimeVal = -1;
+
+                Object configObj = row.get("config");
+                if (configObj != null) {
+                    String configJson = configObj.toString();
+                    try {
+                        Map<String, Object> configMap = mapper.readValue(configJson, Map.class);
+                        if (configMap.containsKey("cpu")) {
+                            cpuVal = ((Number) configMap.get("cpu")).doubleValue();
+                        }
+                        if (configMap.containsKey("mem")) {
+                            memVal = ((Number) configMap.get("mem")).doubleValue();
+                        }
+                        if (configMap.containsKey("uptime")) {
+                            uptimeVal = ((Number) configMap.get("uptime")).longValue();
+                        }
+                    } catch (Exception ignored) {}
+                }
+                
+                node.put("cpu", cpuVal >= 0 ? cpuVal : null);
+                node.put("mem", memVal >= 0 ? memVal : null);
+                node.put("uptime", uptimeVal >= 0 ? uptimeVal : null);
+                nodes.add(node);
+            }
+        } catch (Exception e) {
+            System.err.println("[MonitorService] Failed to query nodes health: " + e.getMessage());
+        }
+        health.put("nodes", nodes);
 
         return health;
     }

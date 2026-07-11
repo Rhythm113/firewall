@@ -761,6 +761,16 @@
 
             <!-- SYSTEM HEALTH TAB -->
             <div id="tab-health" class="tab-content" style="display: none;">
+                <!-- Node Health Overview -->
+                <div class="card" style="margin-bottom: 24px;">
+                    <h3 style="margin-top: 0; font-size: 0.95rem; text-transform: uppercase; color: #9ca3af; margin-bottom: 20px; display: flex; align-items: center; gap: 8px;">
+                        <svg style="width: 18px; height: 18px; fill: #9ca3af;" viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg> Firewall Node Health
+                    </h3>
+                    <div id="nodes-health-container" class="grid-3" style="gap: 16px;">
+                        <div style="color: #9ca3af; text-align: center; grid-column: span 3; padding: 20px;">Loading firewall nodes...</div>
+                    </div>
+                </div>
+
                 <!-- CPU & Memory Gauges -->
                 <div class="grid-3" style="margin-bottom: 24px;">
                     <div class="card" style="text-align: center;">
@@ -784,7 +794,7 @@
                 <div id="health-spike-banner" style="display: none; margin-bottom: 24px;">
                     <div class="card" id="health-spike-inner" style="border-color: #ef4444; border-width: 2px; padding: 16px;">
                         <div style="display: flex; align-items: center; gap: 12px;">
-                            <span style="font-size: 1.5rem;">&#9888;</span>
+                            <svg style="width: 24px; height: 24px; fill: #ef4444;" viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
                             <div>
                                 <strong id="health-spike-title" style="color: #ef4444; font-size: 1rem;">TRAFFIC SPIKE DETECTED</strong>
                                 <div id="health-spike-message" style="color: #fca5a5; font-size: 0.85rem; margin-top: 4px;"></div>
@@ -1000,6 +1010,7 @@
                 if (statsRes.ok) {
                     const stats = await statsRes.json();
                     document.getElementById('stat-events').innerText = stats.total_events || 0;
+                    document.getElementById('stat-indicators').innerText = stats.total_indicators || 0;
                     window.timelineData = stats.timeline || [];
                     drawTimeline();
                 }
@@ -1664,6 +1675,48 @@
 
                 // --- Uptime ---
                 document.getElementById('health-uptime').innerText = formatUptime(data.uptime_seconds);
+
+                // --- Node Health ---
+                const nodesContainer = document.getElementById('nodes-health-container');
+                if (nodesContainer && data.nodes) {
+                    if (data.nodes.length === 0) {
+                        nodesContainer.innerHTML = `<div style="color: #9ca3af; text-align: center; grid-column: span 3; padding: 20px;">No registered firewall nodes found.</div>`;
+                    } else {
+                        nodesContainer.innerHTML = data.nodes.map(node => {
+                            const isOffline = node.status !== 'active';
+                            const statusColor = isOffline ? '#ef4444' : '#10b981';
+                            const statusBg = isOffline ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)';
+                            
+                            const cpuText = (node.cpu !== null && node.cpu !== undefined && node.cpu >= 0) ? node.cpu.toFixed(1) + '%' : 'N/A';
+                            const memText = (node.mem !== null && node.mem !== undefined && node.mem >= 0) ? node.mem.toFixed(1) + '%' : 'N/A';
+                            const uptimeText = (node.uptime !== null && node.uptime !== undefined && node.uptime >= 0) ? formatUptime(node.uptime) : 'N/A';
+                            
+                            return `
+                                <div class="card" style="background: rgba(255, 255, 255, 0.01); border: 1px solid rgba(255, 255, 255, 0.04); padding: 20px; border-radius: 16px; text-align: left;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                                        <strong style="font-size: 1.05rem; color: #f3f4f6;">${node.hostname || 'Unnamed Node'}</strong>
+                                        <span style="font-size: 0.75rem; background: ${statusBg}; color: ${statusColor}; padding: 4px 10px; border-radius: 100px; font-weight: 600; text-transform: uppercase;">${node.status}</span>
+                                    </div>
+                                    <div style="font-size: 0.75rem; color: #9ca3af; margin-bottom: 12px; font-family: monospace;">IP: ${node.ip}</div>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 0.85rem;">
+                                        <div>
+                                            <div style="color: #9ca3af; margin-bottom: 4px;">CPU Load</div>
+                                            <div style="font-size: 1.2rem; font-weight: 700; color: ${isOffline ? '#6b7280' : 'var(--accent)'};">${cpuText}</div>
+                                        </div>
+                                        <div>
+                                            <div style="color: #9ca3af; margin-bottom: 4px;">Memory</div>
+                                            <div style="font-size: 1.2rem; font-weight: 700; color: ${isOffline ? '#6b7280' : '#10b981'};">${memText}</div>
+                                        </div>
+                                        <div style="grid-column: span 2; border-top: 1px solid rgba(255, 255, 255, 0.04); padding-top: 8px; margin-top: 4px;">
+                                            <div style="color: #9ca3af; margin-bottom: 4px;">Uptime</div>
+                                            <div style="font-weight: 600; color: #f3f4f6;">${uptimeText}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('');
+                    }
+                }
 
                 // --- Spike Alert ---
                 const spikeBanner = document.getElementById('health-spike-banner');

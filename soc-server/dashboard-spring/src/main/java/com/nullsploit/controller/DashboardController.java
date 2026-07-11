@@ -159,6 +159,10 @@ public class DashboardController {
         Integer totalEvents = jdbc.queryForObject(countSql, Integer.class, params.toArray());
         res.put("total_events", totalEvents != null ? totalEvents : 0);
 
+        String indicatorSql = "SELECT COUNT(*) FROM events" + whereClause.toString() + " AND threat_type NOT IN (5, 13)";
+        Integer totalIndicators = jdbc.queryForObject(indicatorSql, Integer.class, params.toArray());
+        res.put("total_indicators", totalIndicators != null ? totalIndicators : 0);
+
         String threatSql = "SELECT threat_type, COUNT(*) as count FROM events" + whereClause.toString() + " GROUP BY threat_type";
         List<Map<String, Object>> byThreat = jdbc.queryForList(threatSql, params.toArray());
         Map<String, Object> threatMap = new HashMap<>();

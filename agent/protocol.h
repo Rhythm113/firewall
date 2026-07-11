@@ -24,4 +24,10 @@ struct soc_msg_hdr {
     uint32_t payload_len; // Size of encrypted payload that follows
 } __attribute__((packed));
 
+struct agent_health_payload {
+    double cpu_usage;
+    double mem_usage;
+    uint64_t uptime_sec;
+} __attribute__((packed));
+
 #endif // PROTOCOL_H

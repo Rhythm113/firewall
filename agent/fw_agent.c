@@ -17,6 +17,8 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <linux/netlink.h>
+#include <sys/sysinfo.h>
+#include <ctype.h>
 #include "protocol.h"
 #include "aes_wrapper.h"
 
@@ -54,6 +56,57 @@ static int read_exact(int fd, void *buf, size_t len) {
         total_read += r;
     }
     return (int)total_read;
+}
+
+static int send_to_soc(uint8_t msg_type, const void *payload_data, size_t payload_len);
+
+static unsigned long long last_user = 0, last_nice = 0, last_system = 0, last_idle = 0;
+
+static double get_cpu_usage(void) {
+    FILE *fp = fopen("/proc/stat", "r");
+    if (!fp) return 0.0;
+    unsigned long long user, nice, system, idle, iowait, irq, softirq, steal, guest, guest_nice;
+    char cpu[16];
+    if (fscanf(fp, "%s %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu",
+               cpu, &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal, &guest, &guest_nice) < 5) {
+        fclose(fp);
+        return 0.0;
+    }
+    fclose(fp);
+    
+    unsigned long long total = user + nice + system + idle + iowait + irq + softirq + steal;
+    unsigned long long prev_total = last_user + last_nice + last_system + last_idle;
+    double usage = 0.0;
+    if (prev_total > 0) {
+        unsigned long long diff_total = total - prev_total;
+        unsigned long long diff_idle = (idle + iowait) - last_idle;
+        if (diff_total > 0) {
+            usage = 100.0 * (double)(diff_total - diff_idle) / (double)diff_total;
+        }
+    }
+    last_user = user;
+    last_nice = nice;
+    last_system = system;
+    last_idle = idle + iowait;
+    return usage;
+}
+
+static void send_health_ping(void) {
+    struct agent_health_payload health;
+    health.cpu_usage = get_cpu_usage();
+    
+    struct sysinfo info;
+    if (sysinfo(&info) == 0) {
+        health.uptime_sec = info.uptime;
+        double total_mem = (double)info.totalram * info.mem_unit;
+        double freeram = (double)info.freeram * info.mem_unit;
+        health.mem_usage = total_mem > 0 ? ((total_mem - freeram) / total_mem) * 100.0 : 0.0;
+    } else {
+        health.uptime_sec = 0;
+        health.mem_usage = 0.0;
+    }
+
+    send_to_soc(MSG_TYPE_PING, &health, sizeof(health));
 }
 
 // Generate random UUID
@@ -425,7 +478,7 @@ int main(int argc, char **argv) {
     connect_to_soc();
     if (soc_fd >= 0) {
         printf("[agent] Sending initial registration ping to SOC server...\n");
-        send_to_soc(MSG_TYPE_PING, NULL, 0);
+        send_health_ping();
     }
 
     load_and_push_blocklist();
@@ -500,7 +553,7 @@ int main(int argc, char **argv) {
                 printf("[agent] Health check: SOC disconnected, attempting reconnect...\n");
                 connect_to_soc();
                 if (soc_fd >= 0) {
-                    send_to_soc(MSG_TYPE_PING, NULL, 0);
+                    send_health_ping();
                     load_and_push_blocklist();
                 }
             }
@@ -731,7 +784,7 @@ int main(int argc, char **argv) {
                 }
             } else {
                 printf("[agent] No events to report. Sending heartbeat ping to SOC...\n");
-                send_to_soc(MSG_TYPE_PING, NULL, 0);
+                send_health_ping();
             }
             last_flush = now;
         }
